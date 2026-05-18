@@ -38,7 +38,7 @@ async function fetchLatestVersion(): Promise<string | null> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3000);
 
-    const resp = await fetch("https://registry.npmjs.org/@synapse/cli/latest", {
+    const resp = await fetch("https://registry.npmjs.org/@2ndbrainlabs-ai/synapse-cli/latest", {
       signal: controller.signal,
     }).finally(() => clearTimeout(timeout));
 

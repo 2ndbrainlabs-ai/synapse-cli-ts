@@ -36,14 +36,14 @@ export async function runUninstall(): Promise<void> {
   console.log(`\n  ${t.dim("Removing npm package...")}`);
 
   try {
-    execSync("npm uninstall -g @synapse/cli", {
+    execSync("npm uninstall -g @2ndbrainlabs-ai/synapse-cli", {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
     });
-    console.log(`  ${t.ok("✓")} Removed @synapse/cli\n`);
+    console.log(`  ${t.ok("✓")} Removed @2ndbrainlabs-ai/synapse-cli\n`);
   } catch {
     console.log(`\n  ${t.dim("To complete removal, run:")}`);
-    console.log(`  ${t.cmd("npm uninstall -g @synapse/cli")}\n`);
+    console.log(`  ${t.cmd("npm uninstall -g @2ndbrainlabs-ai/synapse-cli")}\n`);
   }
 
   console.log(`  ${t.dim("Synapse has been uninstalled. Goodbye!")}\n`);

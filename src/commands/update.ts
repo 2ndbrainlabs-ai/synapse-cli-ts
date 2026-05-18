@@ -6,7 +6,7 @@ export async function runUpdate(): Promise<void> {
   console.log(`\n  ${t.brand("Updating Synapse CLI...")}\n`);
 
   try {
-    const output = execSync("npm update -g @synapse/cli", {
+    const output = execSync("npm update -g @2ndbrainlabs-ai/synapse-cli", {
       encoding: "utf-8",
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -24,7 +24,7 @@ export async function runUpdate(): Promise<void> {
     sectionBox("Update Failed", "err", [
       "Could not update Synapse CLI.",
       stderr ? `Error: ${stderr.trim()}` : "Try running manually:",
-      `  ${t.cmd("npm update -g @synapse/cli")}`,
+      `  ${t.cmd("npm update -g @2ndbrainlabs-ai/synapse-cli")}`,
     ]);
     process.exitCode = 1;
   }
