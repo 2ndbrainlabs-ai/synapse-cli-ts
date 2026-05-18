@@ -1,6 +1,6 @@
 {
   "name": "@2ndbrainlabs-ai/synapse-cli",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Synapse CLI - Agentic MCP Server Generator",
   "type": "module",
   "bin": {
