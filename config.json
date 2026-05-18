@@ -1,5 +1,5 @@
 {
-  "backend_url": "",
+  "backend_url": "https://grpc.synaps3.ai",
   "backend_host": "localhost",
   "backend_port": "50051",
   "api_url": "https://api.synaps3.ai",
