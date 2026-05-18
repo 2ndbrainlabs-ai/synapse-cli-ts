@@ -44,7 +44,7 @@ function loadRootConfig(): RootConfig {
   if (_rootConfig) return _rootConfig;
   try {
     const __dirname = path.dirname(fileURLToPath(import.meta.url));
-    const configPath = path.resolve(__dirname, "../../config.json");
+    const configPath = path.resolve(__dirname, "../config.json");
     _rootConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
   } catch {
     _rootConfig = {};
