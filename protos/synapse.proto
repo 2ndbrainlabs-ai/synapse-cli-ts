@@ -1,0 +1,260 @@
+syntax = "proto3";
+
+package synapse;
+
+// Main Synapse Service with bidirectional streaming for high-throughput agentic workflows
+service SynapseService {
+  // Build MCP server - bidirectional stream for real-time agent communication
+  rpc Build(stream BuildMessage) returns (stream BuildMessage);
+
+  // Analyze codebase - bidirectional stream for AI-powered analysis
+  rpc Analyze(stream AnalyzeMessage) returns (stream AnalyzeMessage);
+
+  // Detect MCP tool candidates - unary RPC, CLI sends all functions, backend AI classifies
+  rpc DetectEndpoints(DetectRequest) returns (DetectResponse);
+
+  // Track CLI event (init, first_auth) - unary, fire-and-forget telemetry
+  rpc TrackEvent(TrackEventRequest) returns (TrackEventResponse);
+}
+
+// ============================================================================
+// BUILD WORKFLOW MESSAGES
+// ============================================================================
+
+// Unified message for build workflow bidirectional streaming
+message BuildMessage {
+  oneof payload {
+    BuildRequest build_request = 1;
+    ToolCallResponse tool_response = 2;
+    StatusUpdate status_update = 3;
+    ToolCallRequest tool_request = 4;
+    BuildResult build_result = 5;
+    ErrorMessage error = 6;
+  }
+}
+
+// Initial request from CLI to start build workflow
+message BuildRequest {
+  string request_id = 1;           // Unique request identifier
+  string query = 2;                // User's MCP server requirements
+  string project_schema = 3;       // Content of project_schema.txt
+  string working_dir = 4;          // Working directory path (for context)
+  string output_file = 5;          // Output filename for generated server
+  bool validate = 6;               // Whether to validate generated code
+  bool docs = 7;                   // Whether to generate documentation
+  bool generate_only = 8;          // Skip planner, use existing todo_list.md
+  string todo_list_content = 9;    // Content of todo_list.md (if generate_only)
+  string context_bundle = 10;      // JSON-encoded context bundle pre-gathered by CLI
+}
+
+// Backend requests CLI to execute a local tool
+message ToolCallRequest {
+  string request_id = 1;           // Unique request ID for matching responses
+  string tool_name = 2;            // Tool to execute (e.g., "read_file", "write_file", "context_search")
+  bytes parameters = 3;            // JSON-encoded tool parameters
+}
+
+// CLI responds with tool execution result
+message ToolCallResponse {
+  string request_id = 1;           // Matches the ToolCallRequest.request_id
+  bool success = 2;                // Whether tool execution succeeded
+  bytes result = 3;                // JSON-encoded result data
+  string error = 4;                // Error message if success=false
+}
+
+// Progress update from backend to CLI
+message StatusUpdate {
+  string stage = 1;                // Current stage (e.g., "planning", "generating", "validating")
+  string message = 2;              // Human-readable status message
+  float progress = 3;              // Progress percentage (0.0 - 1.0)
+  string agent_name = 4;           // Which agent is currently active
+  string task_name = 5;            // Current task being executed
+}
+
+// Final build result
+message BuildResult {
+  bool success = 1;                // Whether build succeeded
+  string server_code = 2;          // Generated MCP server code (complete mcp_server.py)
+  int32 tool_count = 3;            // Number of tools implemented
+  int32 resource_count = 4;        // Number of resources implemented
+  string documentation = 5;        // Generated documentation
+  string todo_list = 6;            // Final todo list content
+  string error = 7;                // Error message if success=false
+}
+
+// Error message
+message ErrorMessage {
+  string code = 1;                 // Error code for programmatic handling
+  string message = 2;              // Human-readable error message
+  string details = 3;              // Additional error details/stack trace
+  bool recoverable = 4;            // Whether the error is recoverable
+}
+
+// ============================================================================
+// ANALYZE WORKFLOW MESSAGES
+// ============================================================================
+
+// Unified message for analyze workflow bidirectional streaming
+message AnalyzeMessage {
+  oneof payload {
+    AnalyzeRequest analyze_request = 1;
+    ToolCallResponse tool_response = 2;
+    StatusUpdate status_update = 3;
+    ToolCallRequest tool_request = 4;
+    AnalyzeResult analyze_result = 5;
+    ErrorMessage error = 6;
+  }
+}
+
+// Initial request from CLI to start analyze workflow
+message AnalyzeRequest {
+  string request_id = 1;           // Unique request identifier
+  string working_dir = 2;          // Working directory to analyze
+  bool verbose = 3;                // Enable verbose output
+  bool use_ai = 4;                 // Use AI-powered analysis (vs local-only)
+}
+
+// Final analyze result
+message AnalyzeResult {
+  bool success = 1;                // Whether analysis succeeded
+  string schema_content = 2;       // Generated project schema content
+  bytes statistics = 3;            // JSON-encoded statistics
+  int32 directory_count = 4;
+  int32 file_count = 5;
+  int32 module_count = 6;
+  int32 class_count = 7;
+  int32 function_count = 8;
+  int32 method_count = 9;
+}
+
+// ============================================================================
+// TOOL PARAMETER MESSAGES (for structured tool calls)
+// ============================================================================
+
+// Parameters for read_file tool
+message ReadFileParams {
+  string target_file = 1;
+  int32 start_line = 2;            // 1-indexed, 0 means read all
+  int32 end_line = 3;              // 1-indexed, 0 means read all
+}
+
+// Parameters for write_file tool
+message WriteFileParams {
+  string target_file = 1;
+  string content = 2;
+}
+
+// Parameters for replace_file tool
+message ReplaceFileParams {
+  string target_file = 1;
+  int32 start_line = 2;
+  int32 end_line = 3;
+  string content = 4;
+}
+
+// Parameters for insert_file tool
+message InsertFileParams {
+  string target_file = 1;
+  string content = 2;
+  int32 line_number = 3;           // 0 means replace entire file
+}
+
+// Parameters for context_search tool
+message ContextSearchParams {
+  string query = 1;
+  string working_dir = 2;
+  int32 max_results = 3;
+  int32 max_depth = 4;
+}
+
+// Parameters for codebase analysis tool
+message AnalyzeCodebaseParams {
+  string working_dir = 1;
+}
+
+// ============================================================================
+// DETECT ENDPOINTS MESSAGES (unary RPC — CLI sends functions, backend classifies)
+// ============================================================================
+
+// Metadata for a single Python function extracted by CLI via AST (no AI)
+message FunctionInfo {
+  string name = 1;                 // Function name
+  string file_path = 2;            // Relative path to file (relative to working_dir)
+  string signature = 3;            // Full function signature string
+  string docstring = 4;            // Docstring (first 500 chars)
+  string return_type = 5;          // Return type annotation as string
+  bool is_async = 6;               // Whether function is async
+  int32 line_number = 7;           // Line number in file
+  repeated string param_names = 8; // Parameter names
+  repeated string param_types = 9; // Parameter type annotations (parallel to param_names)
+  string endpoint_type = 10;       // "function", "method", "fastapi", "flask"
+}
+
+// Request: CLI sends all extracted functions for AI classification
+message DetectRequest {
+  string working_dir = 1;                  // Project working directory
+  repeated FunctionInfo functions = 2;     // All functions extracted via AST
+  string project_schema = 3;              // Content of project_schema.txt for context
+}
+
+// A single AI-classified MCP tool candidate
+message DetectedEndpoint {
+  string name = 1;                       // Function name
+  string file_path = 2;                  // Relative file path
+  float confidence = 3;                  // 0.0-1.0 confidence score
+  string human_title = 4;               // Readable title (e.g. "Search Records")
+  string human_description = 5;         // One-sentence description
+  string conversion_type = 6;           // "ready" | "requires_wrapper" | "not_suitable"
+  string client_dependency_json = 7;    // JSON of ClientDependency or empty string
+  string subcategory = 8;               // Category hint (e.g. "database", "api")
+  string signature = 9;                 // Function signature (echoed from FunctionInfo)
+  string docstring = 10;                // Docstring (echoed from FunctionInfo)
+  int32 line_number = 11;               // Line number (echoed from FunctionInfo)
+}
+
+// Response: backend returns AI-classified candidates sorted by confidence
+message DetectResponse {
+  repeated DetectedEndpoint candidates = 1;  // Top candidates (confidence >= 0.4)
+  string error = 2;                          // Error message if detection failed
+}
+
+// ============================================================================
+// HEALTH CHECK (for monitoring)
+// ============================================================================
+
+message HealthCheckRequest {
+  string service = 1;
+}
+
+message HealthCheckResponse {
+  enum ServingStatus {
+    UNKNOWN = 0;
+    SERVING = 1;
+    NOT_SERVING = 2;
+  }
+  ServingStatus status = 1;
+  string version = 2;
+  int64 uptime_seconds = 3;
+}
+
+// ============================================================================
+// TELEMETRY MESSAGES
+// ============================================================================
+
+message TrackEventRequest {
+  string event_type = 1;        // "init" | "first_auth" | "analyze" | "quota_check"
+  string api_key_hash = 2;      // sha256 of raw API key (for user attribution)
+  string working_dir_hash = 3;  // sha256 of working_dir (for project uniqueness)
+  int64 lines_count = 4;        // Lines analyzed in this run (for quota tracking)
+}
+
+message TrackEventResponse {
+  bool success = 1;
+  bool quota_exceeded = 2;      // true if any quota limit has been reached
+  string quota_message = 3;     // e.g. "Contact synaps3.ai for extended limits."
+  int32 mcp_servers_count = 4;  // Current MCP servers created
+  int32 max_mcp_servers = 5;    // Maximum allowed MCP servers
+  int64 lines_indexed = 6;      // Current lines indexed
+  int64 max_lines_indexed = 7;  // Maximum allowed lines indexed
+}
+
