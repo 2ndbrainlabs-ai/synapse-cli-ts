@@ -269,13 +269,6 @@ async function displayAvailableComponents(workingDir: string): Promise<void> {
 // Build stages display
 // ---------------------------------------------------------------------------
 
-const STAGE_LABELS: Record<string, [string, string]> = {
-  initializing: ["brand", "Initializing"],
-  planning:     ["brand", "Planning MCP server"],
-  task_list:    ["brand", "Compiling tasks"],
-  generating:   ["brand", "Generating code"],
-  complete:     ["ok",    "Generation complete"],
-};
 
 // ---------------------------------------------------------------------------
 // Main entry
@@ -323,14 +316,7 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
   const { ProgressIndicator } = await import("../ui/progress.js");
   const spinner = new ProgressIndicator();
 
-  spinner.start("Syncing index");
-  try {
-    const { syncIndex } = await import("../indexer/code-indexer.js");
-    const stats = await syncIndex(workingDir, synapseDir);
-    spinner.complete(`Index synced  ${t.dim(`+${stats.added} ~${stats.updated} -${stats.deleted}`)}`);
-  } catch (e) {
-    spinner.fail(`Index sync failed: ${e}`);
-  }
+  spinner.complete("Ready");
 
   // Handle --generate-only
   if (opts.generateOnly) {
@@ -347,202 +333,172 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
     return runGeneration(workingDir, schemaPath, opts, "Generate from existing todo_list.md", null, todoContent);
   }
 
-  // 5. Scan codebase
-  spinner.start("Scanning codebase");
-  const { extractAllFunctions } = await import("../parsers/python/index.js");
-  const allFunctions = extractAllFunctions(workingDir);
-  spinner.complete(`Scanned codebase  ${t.dim(`${allFunctions.length} functions`)}`);
+  // 5. Discover use cases via exploratory agent
+  const projectSchema = fs.readFileSync(schemaPath, "utf-8");
 
-  // 6. Detect endpoints (cached)
-  let candidates: _DetectedEndpointProxy[] = [];
-  try {
-    spinner.start("Discovering tool candidates");
-    const projectSchema = fs.readFileSync(schemaPath, "utf-8");
-    const cachePath = getEndpointsCachePath(workingDir);
-    const { detectWithCache } = await import("../builder/detection-cache.js");
-    const [rawCandidates, newDetectCount] = await detectWithCache(allFunctions, workingDir, projectSchema, cachePath);
-    candidates = rawCandidates.map((c) => new _DetectedEndpointProxy(c, workingDir));
-    spinner.complete(`Found ${t.num(String(candidates.length))} tool candidates`);
+  interface DiscoveredUseCase { title: string; description: string; functions: string[]; module: string; }
+  let useCases: DiscoveredUseCase[] = [];
+  let finalQuery: string | undefined = opts.query;
 
-    // Telemetry: detect event (only if new detections occurred)
-    if (newDetectCount > 0 && apiKey) {
-      try {
-        const { trackEvent } = await import("../grpc/telemetry.js");
-        trackEvent("detect", apiKey, workingDir, 0, 0, newDetectCount).catch(() => {});
-      } catch { /* optional */ }
+  if (!finalQuery) {
+    const discoverStart = Date.now();
+    const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    let frameIdx = 0;
+    let lastLen = 0;
+    let toolCalls = 0;
+
+    const fmtTime = (ms: number) => {
+      const secs = Math.floor(ms / 1000);
+      if (secs < 60) return `${secs}s`;
+      return `${Math.floor(secs / 60)}m ${secs % 60}s`;
+    };
+
+    const discoverInterval = setInterval(() => {
+      frameIdx = (frameIdx + 1) % frames.length;
+      const elapsed = fmtTime(Date.now() - discoverStart);
+      const calls = toolCalls > 0 ? `  ${t.num(`${toolCalls} calls`)}` : "";
+      const line = `  ${t.brand(frames[frameIdx])}  Exploring codebase  ${t.dim(elapsed)}${calls}`;
+      const plainLen = line.replace(/\x1b\[[0-9;]*m/g, "").length;
+      process.stdout.write(`\r${" ".repeat(lastLen + 2)}\r${line}`);
+      lastLen = plainLen;
+    }, 80);
+
+    try {
+      const { SynapseClient } = await import("../grpc/client.js");
+      const backend = getBackendConfig();
+      const client = new SynapseClient({
+        url: backend.url ?? undefined,
+        host: backend.host ?? undefined,
+        port: backend.port ? parseInt(backend.port, 10) : undefined,
+        workingDir,
+      });
+
+      const result = await client.discoverUseCases(projectSchema, (info) => {
+        toolCalls = info.toolCalls;
+      });
+
+      clearInterval(discoverInterval);
+      process.stdout.write(`\r${" ".repeat(lastLen + 2)}\r`);
+
+      if (result.error) {
+        console.log(`  ${t.warn("!")}  Discovery failed: ${result.error}`);
+      } else {
+        useCases = result.useCases;
+        console.log(`  ${t.ok("✓")}  Discovered ${t.num(String(useCases.length))} use cases  ${t.dim(fmtTime(Date.now() - discoverStart))}`);
+      }
+    } catch (e) {
+      clearInterval(discoverInterval);
+      process.stdout.write(`\r${" ".repeat(lastLen + 2)}\r`);
+      console.log(`  ${t.warn("!")}  Discovery error: ${e}`);
     }
-  } catch (e) {
-    spinner.fail(`Discovery error: ${e}`);
   }
 
-  // 7. Interactive endpoint selection
-  let selectedEndpoints: _DetectedEndpointProxy[] = [];
+  // 6. Use case selection
   let customSelected = false;
-  let finalQuery: string | undefined = opts.query;
 
   if (finalQuery) {
     stepBrand("Using provided query", `"${finalQuery}"`);
-  } else if (candidates.length > 0) {
+  } else if (useCases.length > 0) {
     try {
-      const { selectEndpoints } = await import("../ui/endpoint-selector.js");
-      const candidateChoices = candidates.map((c) => c.toEndpointCandidate(workingDir));
-      const result = await selectEndpoints(candidateChoices);
-      customSelected = result.customSelected;
-      const selectedNames = new Set(result.selected.map((s) => s.name));
-      selectedEndpoints = candidates.filter((c) => selectedNames.has(c.name));
+      const { checkbox } = await import("@inquirer/prompts");
+      const chalk = (await import("chalk")).default;
 
-      if (!selectedEndpoints.length && !customSelected) {
+      sectionHeader("Select Use Cases");
+      console.log();
+
+      const choices = [
+        {
+          name: `${chalk.hex("#a5b4fc").bold("Custom requirement")} ${t.dim("— describe what you need")}`,
+          value: "__CUSTOM__",
+          checked: false,
+        },
+        ...useCases.map((uc, i) => ({
+          name: `${chalk.hex("#d97757").bold(uc.title)} ${t.dim("—")} ${t.text(uc.description)}  ${t.muted(`(${uc.functions.length} functions)`)}`,
+          value: String(i),
+          checked: false,
+        })),
+      ];
+
+      const selected = await checkbox<string>({
+        message: t.brand("Choose use cases to build as MCP tools:"),
+        choices,
+        loop: false,
+      });
+
+      customSelected = selected.includes("__CUSTOM__");
+      const selectedUseCases = selected
+        .filter((v) => v !== "__CUSTOM__")
+        .map((v) => useCases[parseInt(v, 10)]);
+
+      if (selectedUseCases.length > 0) {
+        console.log();
+        console.log(`  ${t.brandBold(`${selectedUseCases.length} use case(s) selected`)}`);
+        for (const uc of selectedUseCases) {
+          console.log(`  ${t.brand(">")} ${t.text(uc.title)} ${t.dim(`(${uc.functions.join(", ")})`)}`);
+        }
+
+        // Build a query from selected use cases
+        const ucDescs = selectedUseCases.map((uc) =>
+          `- ${uc.title}: ${uc.description} (functions: ${uc.functions.join(", ")})`
+        );
+        finalQuery = "Create MCP tools for the following use cases:\n\n" + ucDescs.join("\n");
+      } else if (!customSelected) {
         stepWarn("No selection made", "switching to custom mode");
         customSelected = true;
       }
     } catch (e) {
       stepWarn("Interactive selection failed", String(e));
-      selectedEndpoints = candidates.filter((c) => c.confidence >= 0.7);
-      if (!selectedEndpoints.length) {
-        selectedEndpoints = candidates.filter((c) => c.confidence >= 0.5);
-      }
+      // Fallback: build for all use cases
+      const allFuncs = useCases.flatMap((uc) => uc.functions);
+      finalQuery = `Create MCP tools wrapping: ${allFuncs.slice(0, 10).join(", ")}`;
     }
   } else {
-    stepInfo("No candidates detected", "switching to custom query mode");
+    stepInfo("No use cases discovered", "switching to custom query mode");
     customSelected = true;
   }
 
-  // 8. Build query from selections + custom combining
-  if (selectedEndpoints.length > 0) {
-    const descs = selectedEndpoints.map((ep) => formatEndpointForPlanner(ep, workingDir));
-    const autoQuery = "Create MCP tools for the following endpoints:\n\n" + descs.join("\n\n");
-
+  // 7. Custom query prompt (if no use case selected and no --query)
+  if (customSelected && !finalQuery) {
     console.log();
-    console.log(`  ${t.brandBold(`${selectedEndpoints.length} endpoint(s) selected`)}`);
-    for (const ep of selectedEndpoints) {
-      const rel = path.relative(workingDir, ep.filePath);
-      console.log(`  ${t.brand(">")} ${t.text(ep.name + "()")} ${t.dim("in")} ${t.path(rel)}`);
-    }
+    console.log(`  ${t.brandBold("Describe your MCP server requirements")}`);
+    console.log(`  ${t.dim("Be specific about the functionality to expose.")}`);
+    console.log();
+    console.log(`  ${t.dim("Examples:")}`);
+    console.log(`    ${t.muted("\"Create tools for file operations and directory listing\"")}`);
+    console.log(`    ${t.muted("\"Expose database query and data retrieval functions\"")}`);
+    console.log();
 
-    if (customSelected && !opts.query) {
-      console.log(`\n  ${t.dim("You also selected Custom Requirement.")}`);
-      const additional = await promptLine(`  ${t.brand(">")} Additional requirements ${t.dim("(Enter to skip)")}: `);
-
-      if (additional.trim()) {
-        spinner.start("Validating custom requirements");
-        const { validateQueryRelevance } = await import("../builder/context-search.js");
-        const customValidation = await validateQueryRelevance(additional, workingDir);
-        spinner.stop();
-
-        if (customValidation.status === "insufficient") {
-          sectionBox("Custom Requirements Not Found", "err", [
-            "",
-            `${t.dim("Requirement:")} ${t.text(additional)}`,
-            "",
-            t.dim("No matching code found. The selected endpoints exist,"),
-            t.dim("but your custom requirements don't match any code."),
-            "",
-            `${t.dim("Try:")} ${t.cmd("synapse build")} ${t.dim("and select only endpoints.")}`,
-            "",
-          ]);
-          return;
-        } else if (customValidation.status === "uncertain") {
-          stepWarn("Limited matches for custom requirements", `${customValidation.high_quality_results} found`);
-        } else {
-          stepOk("Custom requirements validated");
-        }
-
-        finalQuery = autoQuery + "\n\nAdditional requirements:\n" + additional;
-      } else {
-        finalQuery = autoQuery;
-      }
-    } else {
-      finalQuery = opts.query ?? autoQuery;
-    }
-  } else if (customSelected) {
-    if (!opts.query) {
-      console.log();
-      console.log(`  ${t.brandBold("Describe your MCP server requirements")}`);
-      console.log(`  ${t.dim("Be specific about the functionality to expose.")}`);
-      console.log();
-      console.log(`  ${t.dim("Examples:")}`);
-      console.log(`    ${t.muted("\"Create tools for file operations and directory listing\"")}`);
-      console.log(`    ${t.muted("\"Expose database query and data retrieval functions\"")}`);
-      console.log();
-
-      finalQuery = await promptLine(`  ${t.brand(">")} `);
-      if (!finalQuery || finalQuery.trim().length < 10) {
-        sectionBox("Query Too Short", "warn", [
-          "Please provide at least 10 characters.",
-        ]);
-        return;
-      }
-    } else {
-      finalQuery = opts.query;
+    finalQuery = await promptLine(`  ${t.brand(">")} `);
+    if (!finalQuery || finalQuery.trim().length < 10) {
+      sectionBox("Query Too Short", "warn", [
+        "Please provide at least 10 characters.",
+      ]);
+      return;
     }
   }
 
   if (!finalQuery) {
     sectionBox("No Input", "warn", [
-      "No endpoints selected and no query provided.",
+      "No use cases selected and no query provided.",
       `Use ${t.cmd("synapse build --query '<requirements>'")}`,
     ]);
     return;
   }
 
-  // 9. Query validation loop
-  const { validateQueryRelevance } = await import("../builder/context-search.js");
-
-  while (true) {
-    const validation = await validateQueryRelevance(finalQuery, workingDir);
-    const [shouldProceed, newQuery] = await displayContextValidationUI(validation, workingDir);
-    if (!shouldProceed) return;
-    if (newQuery) { finalQuery = newQuery; continue; }
-    break;
-  }
-
-  // 10. Build context bundle
+  // 8. Build context bundle (custom query mode — let backend retrieve)
   let contextBundle: Record<string, unknown> | null = null;
+  contextBundle = { endpoints: [], project_name: path.basename(workingDir), mode: "custom_prompt" };
+  stepOk("Ready", "backend will explore and build");
 
-  if (selectedEndpoints.length > 0) {
+  // Inject CONTEXT.md if available
+  const contextMdPath = getContextMdPath(workingDir);
+  if (fs.existsSync(contextMdPath)) {
     try {
-      spinner.start("Building context bundle");
-      const { buildContextBundle } = await import("../builder/context-builder.js");
-      contextBundle = buildContextBundle(
-        selectedEndpoints.map((ep) => ({
-          name: ep.name,
-          file_path: path.relative(workingDir, ep.filePath),
-          signature: ep.signature, docstring: ep.docstring,
-          return_type: ep.returnType, conversion_type: ep.conversionType,
-          client_dependency: ep.clientDependency,
-        })),
-        workingDir, synapseDir,
-      ) as Record<string, unknown>;
-      spinner.complete("Context bundle ready");
-    } catch (e) {
-      spinner.fail(`Context bundle error: ${e}`);
-    }
-  } else {
-    try {
-      spinner.start("Expanding query and building context");
-      const { buildContextBundleFromQuery } = await import("../builder/query-expander.js");
-      const resolvedKey = resolveApiKey(workingDir) ?? "";
-      contextBundle = (await buildContextBundleFromQuery(
-        finalQuery, workingDir, synapseDir, undefined, resolvedKey,
-      )) as Record<string, unknown>;
-      spinner.complete("Context bundle ready");
-    } catch (e) {
-      spinner.fail(`Query expansion error: ${e}`);
-    }
+      contextBundle.project_context = fs.readFileSync(contextMdPath, "utf-8");
+    } catch { /* non-fatal */ }
   }
 
-  // 11. Inject CONTEXT.md
-  if (contextBundle) {
-    const contextMdPath = getContextMdPath(workingDir);
-    if (fs.existsSync(contextMdPath)) {
-      try {
-        contextBundle.project_context = fs.readFileSync(contextMdPath, "utf-8");
-        stepOk("Loaded project context", ".synapse/CONTEXT.md");
-      } catch { /* non-fatal */ }
-    }
-  }
-
-  // 12. Generation
+  // 9. Generation
   return runGeneration(workingDir, schemaPath, opts, finalQuery, contextBundle, null);
 }
 
@@ -563,44 +519,43 @@ async function runGeneration(
 
   sectionHeader("Building MCP Server");
 
-  const { CodeGenerationUI } = await import("../ui/code-gen-ui.js");
-  const state = { genUI: null as InstanceType<typeof CodeGenerationUI> | null };
+  const { BuildProgressUI } = await import("../ui/build-progress.js");
+  const state = { progress: null as InstanceType<typeof BuildProgressUI> | null };
   const genStartTime = Date.now();
+
+  const STAGE_DISPLAY: Record<string, string> = {
+    retrieving: "Analyzing codebase",
+    generating: "Generating code",
+    verifying: "Verifying output",
+    planning: "Planning",
+    initializing: "Initializing",
+  };
 
   const onStatus = (stage: string, _message: string, _progress: number) => {
     const s = stage.toLowerCase();
     if (s === currentStage) return;
     currentStage = s;
 
-    if (s === "generating" && !state.genUI) {
-      state.genUI = new CodeGenerationUI();
-      state.genUI.start(genStartTime);
+    if (!state.progress && s !== "complete") {
+      state.progress = new BuildProgressUI();
+      state.progress.start(genStartTime);
+    }
+
+    if (s === "complete" && state.progress) {
+      state.progress.complete();
+      state.progress = null;
       return;
     }
 
-    if (s === "complete" && state.genUI) {
-      state.genUI.complete();
-      state.genUI = null;
-      return;
-    }
-
-    if (state.genUI) return;
-
-    const entry = STAGE_LABELS[s];
-    if (entry) {
-      const [color, label] = entry;
-      if (color === "ok") {
-        stepOk(label);
-      } else {
-        stepBrand(label);
-      }
-    } else {
-      stepBrand(stage);
+    if (state.progress) {
+      state.progress.updateStage(STAGE_DISPLAY[s] || s);
     }
   };
 
   const onToolCall = (_toolName: string, _result: unknown) => {
-    // Tool calls are silent during generation UI animation
+    if (state.progress) {
+      state.progress.incrementToolCalls();
+    }
   };
 
   console.log();
@@ -611,6 +566,7 @@ async function runGeneration(
     const client = new SynapseClient({
       url: backend.url ?? undefined,
       host: backend.host ?? undefined,
+      port: backend.port ? parseInt(backend.port, 10) : undefined,
       workingDir,
     });
 
@@ -623,9 +579,9 @@ async function runGeneration(
       callbacks: { onStatus, onToolCall },
     });
 
-    if (state.genUI) {
-      state.genUI.stop();
-      state.genUI = null;
+    if (state.progress) {
+      state.progress.complete();
+      state.progress = null;
     }
 
     if (!result.success) {
@@ -655,16 +611,41 @@ async function runGeneration(
 
     // Success display
     const absOutput = path.resolve(workingDir, opts.output);
-    const configSnippet = JSON.stringify({
-      mcpServers: { "custom-server": { command: "python", args: [absOutput] } },
-    }, null, 2);
 
-    sectionBox("MCP Server Generated", "ok", [
+    // Detect required env vars from generated code
+    const envVarMatches = (result.serverCode ?? "").matchAll(/os\.getenv\(["']([A-Z_][A-Z0-9_]*)["']/g);
+    const envVars = [...new Set([...envVarMatches].map((m) => m[1]))];
+
+    // Build MCP config with env vars included
+    const mcpServerConfig: Record<string, unknown> = {
+      command: "python",
+      args: [absOutput],
+    };
+    if (envVars.length > 0) {
+      const envObj: Record<string, string> = {};
+      for (const v of envVars) envObj[v] = "";
+      mcpServerConfig.env = envObj;
+    }
+    const configSnippet = JSON.stringify({ mcpServers: { "custom-server": mcpServerConfig } }, null, 2);
+
+    const lines = [
       "",
       `${t.dim("Tools")}       ${t.num(String(result.toolCount ?? 0))}`,
       `${t.dim("Resources")}   ${t.num(String(result.resourceCount ?? 0))}`,
       `${t.dim("Output")}      ${t.path(opts.output)}`,
       "",
+    ];
+
+    if (envVars.length > 0) {
+      lines.push(`${t.dim("Required environment variables:")}`);
+      for (const v of envVars) {
+        lines.push(`  ${t.warn("•")} ${t.cmd(v)}`);
+      }
+      lines.push(`  ${t.dim("Set these in a .env file or export them before running the server.")}`);
+      lines.push("");
+    }
+
+    lines.push(
       `${t.dim("Next steps:")}`,
       `  ${t.num("1.")} Review the generated server code`,
       `  ${t.num("2.")} ${t.cmd("pip install mcp")}`,
@@ -673,11 +654,13 @@ async function runGeneration(
       `${t.dim("MCP client config:")}`,
       ...configSnippet.split("\n").map((line) => `  ${t.muted(line)}`),
       "",
-    ]);
+    );
+
+    sectionBox("MCP Server Generated", "ok", lines);
   } catch (e) {
-    if (state.genUI) {
-      state.genUI.stop();
-      state.genUI = null;
+    if (state.progress) {
+      state.progress.stop();
+      state.progress = null;
     }
     sectionBox("Build Error", "err", [String(e)]);
   }

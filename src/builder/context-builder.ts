@@ -45,6 +45,7 @@ export interface ContextEndpoint {
   resolved_imports: Record<string, string>;
   parameters: ParamManifestEntry[];
   init_params: ParamManifestEntry[];
+  is_async: boolean;
 }
 
 export interface ContextBundle {
@@ -666,12 +667,15 @@ export function buildContextBundle(
       resolved_imports: resolvedImports,
       parameters,
       init_params: initParams,
+      is_async: /async\s+def\s/.test(sourceCode),
     });
   }
 
+  const hasTs = endpoints.some((ep: any) => ep.file_path?.match(/\.(ts|js|tsx)$/));
   return {
     endpoints,
     project_name: path.basename(workingDir),
     mode: "endpoint_selection",
+    language: hasTs ? "typescript" : "python",
   };
 }

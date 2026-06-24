@@ -17,7 +17,13 @@ const program = new Command();
 program
   .name("synapse")
   .description("Synapse - Agentic MCP Server Generator")
-  .version(pkg.version);
+  .version(pkg.version)
+  .option("--dev", "Use local backend (localhost:50051)");
+
+// Show dev mode notice
+if (process.argv.includes("--dev") || process.env.SYNAPSE_DEV === "1") {
+  console.log("  \x1b[33m⚡ Dev mode: using localhost:50051\x1b[0m\n");
+}
 
 program
   .command("init")

@@ -62,40 +62,8 @@ export async function runAnalyze(
     stepOk("Saved project schema and statistics");
 
     // Step 3: Index code chunks (incremental if metadata exists)
-    const { loadIndexMetadata } = await import("../indexer/metadata.js");
-    const existingMetadata = loadIndexMetadata(synapseDir);
-    const hasExistingIndex = Object.keys(existingMetadata).length > 0;
-
-    let chunkCount = 0;
-
-    if (hasExistingIndex) {
-      // Incremental: only reindex changed/new files
-      const { syncIndex } = await import("../indexer/code-indexer.js");
-      const syncStats = await syncIndex(workingDir, synapseDir, "code_context", undefined, undefined, verbose);
-
-      if (syncStats.added === 0 && syncStats.updated === 0 && syncStats.deleted === 0) {
-        stepOk("Index up to date", `${syncStats.unchanged} files unchanged`);
-      } else {
-        stepOk(
-          "Synced index",
-          `+${syncStats.added} new ${t.dim("·")} ~${syncStats.updated} updated ${t.dim("·")} -${syncStats.deleted} removed`,
-        );
-      }
-      chunkCount = syncStats.added + syncStats.updated + syncStats.unchanged;
-    } else {
-      // First run: full index
-      const { indexProject, storeChunks } = await import("../indexer/code-indexer.js");
-      const chunks = indexProject(workingDir, undefined, verbose);
-      chunkCount = await storeChunks(chunks, synapseDir, "code_context");
-
-      if (chunkCount > 0) {
-        const { initializeIndexMetadata } = await import("../indexer/metadata.js");
-        initializeIndexMetadata(workingDir, synapseDir);
-        stepOk("Indexed code for semantic search", `${chunkCount} chunks`);
-      } else {
-        stepWarn("Code indexing produced no chunks", "check your project files");
-      }
-    }
+    const chunkCount = statistics.function_count + statistics.class_count;
+    stepOk("Codebase analyzed", `${chunkCount} functions/classes found`);
 
     // Results summary
     console.log();

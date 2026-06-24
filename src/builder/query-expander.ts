@@ -552,40 +552,35 @@ export async function buildContextBundleFromQuery(
     query: userQuery,
   };
 
-  // Step 1: Semantic search across expanded terms
-  const { searchCode } = await import("../indexer/code-indexer.js");
+  // Step 1: Grep-based search across expanded terms
+  const { searchCodebaseContext } = await import("./context-search.js");
   const seenKeys = new Set<string>();
   const rawChunks: RankedChunk[] = [];
 
-  for (const term of searchTerms) {
+  const searchResults = await searchCodebaseContext(userQuery, workingDir, 20);
+  for (const chunk of searchResults.context_snippets) {
+    const key = `${chunk.file ?? ""}::${chunk.name ?? ""}`;
+    if (seenKeys.has(key)) continue;
+    seenKeys.add(key);
+
+    let mtime = 0;
     try {
-      const results = await searchCode(term, synapseDir, "code_context", 5);
-      for (const chunk of results) {
-        const key = `${chunk.filePath ?? ""}::${chunk.name ?? ""}`;
-        if (seenKeys.has(key)) continue;
-        seenKeys.add(key);
+      const absPath = path.isAbsolute(chunk.file) ? chunk.file : path.join(workingDir, chunk.file);
+      mtime = fs.statSync(absPath).mtimeMs / 1000;
+    } catch { /* skip */ }
 
-        let mtime = 0;
-        try {
-          mtime = fs.statSync(chunk.filePath).mtimeMs / 1000;
-        } catch { /* skip */ }
-
-        rawChunks.push({
-          name: chunk.name ?? "",
-          file_path: chunk.filePath ?? "",
-          signature: chunk.signature ?? "",
-          docstring: "",
-          code: chunk.code ?? "",
-          type: chunk.type ?? "function",
-          start_line: chunk.startLine ?? 0,
-          end_line: chunk.endLine ?? 0,
-          score: chunk.score ?? 0,
-          mtime,
-        });
-      }
-    } catch {
-      continue;
-    }
+    rawChunks.push({
+      name: chunk.name ?? "",
+      file_path: chunk.file ?? "",
+      signature: chunk.signature ?? "",
+      docstring: "",
+      code: chunk.content ?? "",
+      type: chunk.type ?? "function",
+      start_line: chunk.start_line ?? 0,
+      end_line: chunk.end_line ?? 0,
+      score: chunk.score ?? 0,
+      mtime,
+    });
   }
 
   // Step 2: Ripgrep exact keyword search

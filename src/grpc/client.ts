@@ -51,6 +51,18 @@ export interface DetectResult {
   error: string;
 }
 
+export interface UseCase {
+  title: string;
+  description: string;
+  functions: string[];
+  module: string;
+}
+
+export interface DiscoverResult {
+  useCases: UseCase[];
+  error: string;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -119,7 +131,7 @@ export class SynapseClient {
     if (opts.url) {
       address = opts.url;
     } else if (opts.host != null) {
-      address = `${opts.host}:${opts.port ?? 443}`;
+      address = `${opts.host}:${opts.port ?? parseInt(backend.port || "443", 10)}`;
     } else {
       address = backend.url ?? `${backend.host}:${backend.port}`;
     }
@@ -137,6 +149,7 @@ export class SynapseClient {
     functions: Record<string, unknown>[],
     workingDir: string,
     projectSchema = "",
+    onBatch?: (info: { candidates: number; classified: number; total: number }) => void,
   ): Promise<DetectResult> {
     const grpc = await import("@grpc/grpc-js");
     const { loadProto } = await import("./proto-loader.js");
@@ -184,36 +197,164 @@ export class SynapseClient {
     };
 
     return new Promise<DetectResult>((resolve) => {
-      const deadline = new Date(Date.now() + 60_000); // 60s timeout
-      client.DetectEndpoints(
-        request,
-        metadata,
-        { deadline },
-        (err: any, response: any) => {
-          client.close();
-          if (err) {
-            resolve({
-              candidates: [],
-              error: `gRPC error: ${err.code}: ${err.details}`,
-            });
-            return;
-          }
-          const candidates = (response.candidates ?? []).map((ep: any) => ({
-            name: ep.name,
-            file_path: ep.file_path,
-            confidence: ep.confidence,
-            human_title: ep.human_title,
-            human_description: ep.human_description,
-            conversion_type: ep.conversion_type,
-            client_dependency_json: ep.client_dependency_json,
-            subcategory: ep.subcategory,
-            signature: ep.signature,
-            docstring: ep.docstring,
-            line_number: ep.line_number,
-          }));
-          resolve({ candidates, error: response.error ?? "" });
+      const allCandidates: DetectResult["candidates"] = [];
+      const call = client.DetectEndpoints(request, metadata);
+
+      call.on("data", (batch: any) => {
+        const batchCandidates = (batch.candidates ?? []).map((ep: any) => ({
+          name: ep.name,
+          file_path: ep.file_path,
+          confidence: ep.confidence,
+          human_title: ep.human_title,
+          human_description: ep.human_description,
+          conversion_type: ep.conversion_type,
+          client_dependency_json: ep.client_dependency_json,
+          subcategory: ep.subcategory,
+          signature: ep.signature,
+          docstring: ep.docstring,
+          line_number: ep.line_number,
+        }));
+        allCandidates.push(...batchCandidates);
+
+        if (onBatch) {
+          onBatch({
+            candidates: allCandidates.length,
+            classified: batch.functions_classified ?? 0,
+            total: batch.total_functions ?? functions.length,
+          });
+        }
+      });
+
+      call.on("end", () => {
+        client.close();
+        resolve({ candidates: allCandidates, error: "" });
+      });
+
+      call.on("error", (err: any) => {
+        client.close();
+        resolve({
+          candidates: allCandidates,
+          error: `gRPC error: ${err.code}: ${err.details ?? err.message}`,
+        });
+      });
+    });
+  }
+
+  // -----------------------------------------------------------------------
+  // DiscoverUseCases — uses Build RPC stream for bidirectional tool support
+  // -----------------------------------------------------------------------
+
+  async discoverUseCases(
+    projectSchema: string,
+    onProgress?: (info: { toolCalls: number; status: string }) => void,
+  ): Promise<DiscoverResult> {
+    const grpc = await import("@grpc/grpc-js");
+    const { loadProto } = await import("./proto-loader.js");
+    const { SynapseService } = loadProto();
+
+    const target = `${this.host}:${this.port}`;
+    const credentials = shouldUseSecure(this.host, this.port)
+      ? grpc.credentials.createSsl()
+      : grpc.credentials.createInsecure();
+
+    const client = new SynapseService(target, credentials, CHANNEL_OPTIONS);
+
+    const apiKey = resolveApiKey(this.workingDir);
+    if (!apiKey) {
+      client.close();
+      return { useCases: [], error: "Missing API key." };
+    }
+
+    const metadata = new grpc.Metadata();
+    metadata.set("x-api-key", apiKey);
+
+    let toolCallCount = 0;
+
+    return new Promise<DiscoverResult>((resolve) => {
+      const call = client.Build(metadata);
+
+      // Send a build request with mode=discover
+      call.write({
+        build_request: {
+          request_id: "",
+          query: "__DISCOVER_USE_CASES__",
+          project_schema: projectSchema,
+          working_dir: this.workingDir,
+          output_file: "",
+          validate: false,
+          docs: false,
+          generate_only: false,
+          todo_list_content: "",
+          context_bundle: JSON.stringify({ mode: "discover", endpoints: [] }),
         },
-      );
+      });
+
+      call.on("data", async (msg: any) => {
+        if (msg.status_update) {
+          const update = msg.status_update;
+          if (onProgress) {
+            onProgress({
+              toolCalls: toolCallCount,
+              status: update.stage ?? "exploring",
+            });
+          }
+        } else if (msg.tool_request) {
+          // Handle tool callbacks (same as build)
+          const req = msg.tool_request;
+          toolCallCount++;
+          if (onProgress) {
+            onProgress({ toolCalls: toolCallCount, status: "exploring" });
+          }
+
+          let parameters: Record<string, unknown> = {};
+          if (req.parameters) {
+            try {
+              const raw = Buffer.isBuffer(req.parameters)
+                ? req.parameters.toString("utf-8")
+                : typeof req.parameters === "string"
+                  ? req.parameters
+                  : new TextDecoder().decode(req.parameters);
+              parameters = JSON.parse(raw);
+            } catch { /* empty params */ }
+          }
+
+          const result = await this.toolExecutor.execute(req.tool_name, parameters);
+
+          call.write({
+            tool_response: {
+              request_id: req.request_id,
+              success: result.success,
+              result: Buffer.from(JSON.stringify(result.result ?? {}), "utf-8"),
+              error: result.error ?? "",
+            },
+          });
+        } else if (msg.build_result) {
+          // Discovery result comes as build_result with use cases in server_code (JSON)
+          const res = msg.build_result;
+          let useCases: UseCase[] = [];
+          try {
+            useCases = JSON.parse(res.server_code || "[]");
+          } catch {
+            useCases = [];
+          }
+          call.end();
+          client.close();
+          resolve({ useCases, error: res.error ?? "" });
+        }
+      });
+
+      call.on("end", () => {
+        client.close();
+        resolve({ useCases: [], error: "" });
+      });
+
+      call.on("error", (err: any) => {
+        client.close();
+        resolve({
+          useCases: [],
+          error: `gRPC error: ${err.code}: ${err.details ?? err.message}`,
+        });
+      });
     });
   }
 

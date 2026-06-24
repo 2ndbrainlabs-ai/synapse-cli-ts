@@ -10,8 +10,11 @@ service SynapseService {
   // Analyze codebase - bidirectional stream for AI-powered analysis
   rpc Analyze(stream AnalyzeMessage) returns (stream AnalyzeMessage);
 
-  // Detect MCP tool candidates - unary RPC, CLI sends all functions, backend AI classifies
-  rpc DetectEndpoints(DetectRequest) returns (DetectResponse);
+  // Discover MCP use cases - server-streaming, agent explores and streams findings
+  rpc DetectEndpoints(DetectRequest) returns (stream DetectBatchResponse);
+
+  // Discover use cases via exploratory agent
+  rpc DiscoverUseCases(DiscoverRequest) returns (stream DiscoverResponse);
 
   // Track CLI event (init, first_auth) - unary, fire-and-forget telemetry
   rpc TrackEvent(TrackEventRequest) returns (TrackEventResponse);
@@ -212,10 +215,48 @@ message DetectedEndpoint {
   int32 line_number = 11;               // Line number (echoed from FunctionInfo)
 }
 
-// Response: backend returns AI-classified candidates sorted by confidence
+// Response: backend returns AI-classified candidates sorted by confidence (legacy, kept for compat)
 message DetectResponse {
-  repeated DetectedEndpoint candidates = 1;  // Top candidates (confidence >= 0.4)
-  string error = 2;                          // Error message if detection failed
+  repeated DetectedEndpoint candidates = 1;
+  string error = 2;
+}
+
+// Streamed batch response: one per classified batch
+message DetectBatchResponse {
+  repeated DetectedEndpoint candidates = 1;  // Candidates from this batch
+  int32 batch_number = 2;                    // Which batch (1-indexed)
+  int32 total_batches = 3;                   // Total batches to process
+  int32 functions_classified = 4;            // Cumulative functions classified so far
+  int32 total_functions = 5;                 // Total functions being classified
+  bool is_final = 6;                         // True on last batch
+  string error = 7;                          // Error if this batch failed
+}
+
+// ============================================================================
+// USE CASE DISCOVERY MESSAGES
+// ============================================================================
+
+// Request: CLI sends project schema for agent-based exploration
+message DiscoverRequest {
+  string project_schema = 1;          // Content of project_schema.txt
+  string working_dir = 2;             // Project working directory
+}
+
+// A discovered use case (group of related functions)
+message UseCase {
+  string title = 1;                   // Short title (2-4 words)
+  string description = 2;            // One sentence describing the capability
+  repeated string functions = 3;     // Function names in this use case
+  string module = 4;                 // Primary module these come from
+}
+
+// Streamed response: progress updates + final use cases
+message DiscoverResponse {
+  repeated UseCase use_cases = 1;    // Use cases found so far (cumulative on final)
+  int32 tool_calls_made = 2;         // How many exploration tool calls made
+  bool is_final = 3;                 // True on last message
+  string status = 4;                 // "exploring" | "complete" | "error"
+  string message = 5;               // Human-readable status
 }
 
 // ============================================================================

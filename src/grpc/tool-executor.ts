@@ -29,6 +29,11 @@ export class ToolExecutor {
       replace_file: this.executeReplaceFile.bind(this),
       insert_file: this.executeInsertFile.bind(this),
       codebase_context_search: this.executeContextSearch.bind(this),
+      find_files: this.executeFindFiles.bind(this),
+      grep: this.executeGrep.bind(this),
+      list_symbols: this.executeListSymbols.bind(this),
+      find_definition: this.executeFindDefinition.bind(this),
+      find_usages: this.executeFindUsages.bind(this),
     };
   }
 
@@ -120,7 +125,7 @@ export class ToolExecutor {
   ): Promise<Record<string, unknown>> {
     const workingDir = (params.working_dir as string) || this.workingDir;
     const query = (params.query as string) || "";
-    const maxResults = (params.max_results as number) || 5;
+    const maxResults = (params.max_results as number) || 10;
 
     const { searchCodebaseContext, formatContextResults } = await import(
       "../builder/context-search.js"
@@ -130,5 +135,64 @@ export class ToolExecutor {
       results,
       formatted_output: formatContextResults(results),
     };
+  }
+
+  private async executeFindFiles(
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const { findFiles } = await import("../tools/find-files.js");
+    const pattern = (params.pattern as string) || "**/*";
+    const directory = (params.directory as string) || this.workingDir;
+    const baseDir = directory.startsWith("/") ? directory : this.workingDir;
+    return findFiles(pattern, baseDir) as unknown as Record<string, unknown>;
+  }
+
+  private async executeGrep(
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const { grepSearch } = await import("../tools/grep-search.js");
+    const pattern = (params.pattern as string) || "";
+    if (!pattern) throw new Error("pattern is required");
+    return grepSearch(pattern, this.workingDir, {
+      path: params.path as string | undefined,
+      file_type: params.file_type as string | undefined,
+      context_lines: (params.context_lines as number) || 0,
+      max_results: (params.max_results as number) || 100,
+      offset: (params.offset as number) || 0,
+      case_sensitive: (params.case_sensitive as boolean) || false,
+    }) as unknown as Record<string, unknown>;
+  }
+
+  private async executeListSymbols(
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const { listSymbols } = await import("../tools/list-symbols.js");
+    return listSymbols(this.workingDir, {
+      file_path: params.file_path as string | undefined,
+      directory: params.directory as string | undefined,
+      pattern: params.pattern as string | undefined,
+    }) as unknown as Record<string, unknown>;
+  }
+
+  private async executeFindDefinition(
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const { findDefinition } = await import("../tools/find-definition.js");
+    const symbol = (params.symbol as string) || "";
+    if (!symbol) throw new Error("symbol is required");
+    return findDefinition(symbol, this.workingDir, {
+      scope: params.scope as string | undefined,
+    }) as unknown as Record<string, unknown>;
+  }
+
+  private async executeFindUsages(
+    params: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const { findUsages } = await import("../tools/find-usages.js");
+    const symbol = (params.symbol as string) || "";
+    if (!symbol) throw new Error("symbol is required");
+    return findUsages(symbol, this.workingDir, {
+      file_type: params.file_type as string | undefined,
+    }) as unknown as Record<string, unknown>;
   }
 }

@@ -202,7 +202,15 @@ export function getApiKeyDisplay(workingDir?: string): [string, string] {
 
 // --- Backend config ---
 
+export function isDevMode(): boolean {
+  return process.env.SYNAPSE_DEV === "1" || process.argv.includes("--dev");
+}
+
 export function getBackendConfig(): BackendConfig {
+  if (isDevMode()) {
+    return { url: null, host: "localhost", port: "50051" };
+  }
+
   const envUrl = (process.env.SYNAPSE_BACKEND_URL ?? "").trim();
   if (envUrl) {
     return { url: envUrl, host: null, port: null };
