@@ -10,14 +10,15 @@ service SynapseService {
   // Analyze codebase - bidirectional stream for AI-powered analysis
   rpc Analyze(stream AnalyzeMessage) returns (stream AnalyzeMessage);
 
-  // Discover MCP use cases - server-streaming, agent explores and streams findings
+  // Discover MCP tool candidates - server-streaming, backend classifies functions in batches
   rpc DetectEndpoints(DetectRequest) returns (stream DetectBatchResponse);
-
-  // Discover use cases via exploratory agent
-  rpc DiscoverUseCases(DiscoverRequest) returns (stream DiscoverResponse);
 
   // Track CLI event (init, first_auth) - unary, fire-and-forget telemetry
   rpc TrackEvent(TrackEventRequest) returns (TrackEventResponse);
+
+  // Note: DiscoverUseCases RPC was removed in v0.2. Discovery now runs over the
+  // Build stream (bidirectional) so agent tool calls to the CLI work end-to-end.
+  // DiscoverRequest / DiscoverResponse message shapes retained below for CLI compat.
 }
 
 // ============================================================================

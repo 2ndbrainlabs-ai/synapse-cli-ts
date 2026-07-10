@@ -671,11 +671,41 @@ export function buildContextBundle(
     });
   }
 
-  const hasTs = endpoints.some((ep: any) => ep.file_path?.match(/\.(ts|js|tsx)$/));
   return {
     endpoints,
     project_name: path.basename(workingDir),
     mode: "endpoint_selection",
-    language: hasTs ? "typescript" : "python",
+    language: detectPrimaryLanguage(endpoints),
   };
+}
+
+/**
+ * Detect the primary language for a set of endpoints by counting file
+ * extensions. Backend uses this to pick the right reference example when
+ * generating the MCP server (python_fastmcp.py, typescript_mcp_sdk.ts,
+ * future java_mcp.java, dotnet_mcp.cs, etc.).
+ *
+ * Returns one of: python, typescript, javascript, go, java, csharp, rust — or
+ * "python" as the safe default when nothing else matches.
+ */
+function detectPrimaryLanguage(endpoints: Array<{ file_path?: string }>): string {
+  const counts: Record<string, number> = {};
+  const bump = (lang: string) => {
+    counts[lang] = (counts[lang] ?? 0) + 1;
+  };
+
+  for (const ep of endpoints) {
+    const fp = ep.file_path ?? "";
+    if (/\.(tsx?|mts|cts)$/i.test(fp)) bump("typescript");
+    else if (/\.(jsx?|mjs|cjs)$/i.test(fp)) bump("javascript");
+    else if (/\.py$/i.test(fp)) bump("python");
+    else if (/\.go$/i.test(fp)) bump("go");
+    else if (/\.java$/i.test(fp)) bump("java");
+    else if (/\.(cs|csx)$/i.test(fp)) bump("csharp");
+    else if (/\.rs$/i.test(fp)) bump("rust");
+    else if (/\.rb$/i.test(fp)) bump("ruby");
+  }
+
+  const ranked = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+  return ranked[0]?.[0] ?? "python";
 }

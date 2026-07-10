@@ -1,23 +1,34 @@
 /**
- * `synapse build` command -- full implementation.
+ * `synapse build` — MCP server generation command.
  *
- * Ported from Python commands/build_command.py.
+ * Flow:
+ *   1. Verify project is initialized and analyzed
+ *   2. Discover use cases via exploratory agent (unless --query provided)
+ *   3. Let user select use cases (or type custom query)
+ *   4. Stream generation over the Build RPC — orbital spinner + PRO TIP box
+ *   5. Write output + show a rounded success panel + copy-paste MCP config
  */
 
 import fs from "node:fs";
 import path from "node:path";
-import { createInterface } from "node:readline";
-import chalk from "chalk";
-import { isInitialized, resolveApiKey, getBackendConfig } from "../config/manager.js";
+import {
+  isInitialized,
+  resolveApiKey,
+  getBackendConfig,
+} from "../config/manager.js";
 import {
   getProjectSynapseDir,
   getProjectSchemaPath,
-  getEndpointsCachePath,
   getContextMdPath,
 } from "../config/paths.js";
-import { t, sectionBox, stepOk, stepWarn, stepInfo, stepBrand, sectionHeader } from "../ui/theme.js";
-import type { EndpointCandidate } from "../ui/endpoint-selector.js";
-import type { ValidationResult, AvailableComponents } from "../builder/context-search.js";
+import { t, stepOk, stepWarn, stepInfo, stepBrand, sectionHeader } from "../ui/theme.js";
+import { roundedBox } from "../ui/box.js";
+import { Spinner } from "../ui/spinner.js";
+import { CodeGenerationUI } from "../ui/code-gen-ui.js";
+import { selectUseCases, type UseCaseChoice } from "../ui/endpoint-selector.js";
+import { styledInput } from "../ui/styled-input.js";
+import { pickVerb } from "../ui/verbs.js";
+import { BULLET } from "../ui/icons.js";
 
 export interface BuildOptions {
   query?: string;
@@ -26,249 +37,6 @@ export interface BuildOptions {
   docs: boolean;
   generateOnly: boolean;
 }
-
-// ---------------------------------------------------------------------------
-// _DetectedEndpointProxy
-// ---------------------------------------------------------------------------
-
-class _DetectedEndpointProxy {
-  name: string;
-  filePath: string;
-  signature: string;
-  docstring: string;
-  returnType: string;
-  confidence: number;
-  conversionType: string;
-  subcategory: string;
-  humanTitle: string;
-  humanDescription: string;
-  lineNumber: number;
-  clientDependency: Record<string, unknown> | null;
-
-  constructor(raw: Record<string, unknown>, workingDir: string) {
-    this.name = (raw.name as string) ?? "";
-    const rel = (raw.file_path as string) ?? "";
-    this.filePath = rel && !path.isAbsolute(rel) ? path.join(workingDir, rel) : rel;
-    this.signature = (raw.signature as string) ?? `def ${this.name}(...)`;
-    this.docstring = (raw.docstring as string) ?? "";
-    this.returnType = (raw.return_type as string) || "Any";
-    this.confidence = Number(raw.confidence ?? 0.5);
-    this.conversionType = (raw.conversion_type as string) ?? "ready";
-    this.subcategory = (raw.subcategory as string) ?? "";
-    this.humanTitle = (raw.human_title as string) ?? this.name;
-    this.humanDescription = (raw.human_description as string) ?? "";
-    this.lineNumber = Number(raw.line_number ?? 0);
-    const cdJson = (raw.client_dependency_json as string) ?? "";
-    try { this.clientDependency = cdJson ? JSON.parse(cdJson) : null; }
-    catch { this.clientDependency = null; }
-  }
-
-  toEndpointCandidate(workingDir: string): EndpointCandidate {
-    return {
-      name: this.name,
-      filePath: path.relative(workingDir, this.filePath),
-      confidence: this.confidence,
-      humanTitle: this.humanTitle,
-      humanDescription: this.humanDescription,
-      conversionType: this.conversionType,
-      clientDependencyJson: this.clientDependency ? JSON.stringify(this.clientDependency) : "",
-      subcategory: this.subcategory,
-      signature: this.signature,
-      docstring: this.docstring,
-      lineNumber: this.lineNumber,
-    };
-  }
-}
-
-function formatEndpointForPlanner(ep: _DetectedEndpointProxy, workingDir: string): string {
-  const rel = path.relative(workingDir, ep.filePath);
-  const lines = [
-    `### Function: \`${ep.name}\``,
-    `- File: \`${rel}\``,
-    `- Signature: \`${ep.signature}\``,
-    `- Conversion Type: ${ep.conversionType.toUpperCase()}`,
-  ];
-  if (ep.conversionType === "requires_wrapper" && ep.clientDependency) {
-    const cd = ep.clientDependency;
-    lines.push(`- Client Required: ${cd.client_name ?? ""}`);
-    lines.push(`- Library: ${cd.library ?? ""}`);
-    const envVars = cd.env_vars as string[] | undefined;
-    if (envVars?.length) lines.push(`- Environment Variables: ${envVars.join(", ")}`);
-  }
-  const first = ep.docstring?.split("\n")[0]?.trim();
-  if (first) lines.push(`- Description: ${first}`);
-  if (ep.returnType && ep.returnType !== "Any") lines.push(`- Return Type: \`${ep.returnType}\``);
-  return lines.join("\n");
-}
-
-// ---------------------------------------------------------------------------
-// Interactive helpers
-// ---------------------------------------------------------------------------
-
-function promptLine(prompt: string): Promise<string> {
-  const rl = createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => {
-    rl.question(prompt, (answer) => {
-      rl.close();
-      resolve(answer.trim());
-    });
-  });
-}
-
-async function displayContextValidationUI(
-  validation: ValidationResult,
-  workingDir: string,
-): Promise<[boolean, string | null]> {
-  const { status, results, message, query } = validation;
-
-  if (status === "valid") return [true, null];
-
-  if (status === "insufficient") {
-    sectionBox("No Relevant Code Found", "err", [
-      "",
-      `${t.dim("Query:")} ${t.text(query)}`,
-      "",
-      t.dim(message),
-      "",
-      t.dim("Synapse can only create MCP servers from code that"),
-      t.dim("EXISTS in your codebase."),
-      "",
-    ]);
-
-    let choice: string;
-    try {
-      const { select } = await import("@inquirer/prompts");
-      const answer = await select<string>({
-        message: t.brand("What would you like to do?"),
-        choices: [
-          { name: `${chalk.hex("#d97757")("Refine")} ${t.dim("— see available code")}`, value: "refine" },
-          { name: `${t.dim("Cancel build")}`, value: "cancel" },
-        ],
-      });
-      choice = answer ?? "cancel";
-    } catch {
-      console.log(`  ${t.num("1.")} Refine query ${t.dim("(see available code)")}`);
-      console.log(`  ${t.num("2.")} Cancel build`);
-      const text = await promptLine(`\n  ${t.brand(">")} `);
-      choice = { "1": "refine", "2": "cancel" }[text] ?? "cancel";
-    }
-
-    if (choice === "refine") {
-      await displayAvailableComponents(workingDir);
-      console.log();
-      const newQuery = await promptLine(`  ${t.brand(">")} New query ${t.dim("(or 'cancel')")}: `);
-      if (!newQuery || newQuery.toLowerCase() === "cancel") {
-        console.log(`\n  ${t.dim("Build cancelled.")}`);
-        return [false, null];
-      }
-      return [true, newQuery];
-    }
-
-    console.log(`\n  ${t.dim("Build cancelled.")}`);
-    return [false, null];
-  }
-
-  // Uncertain — 1-2 results
-  sectionBox("Limited Context Found", "warn", [
-    "",
-    `${t.dim("Query:")} ${t.text(query)}`,
-    "",
-    `${t.dim(message)}:`,
-    ...results.slice(0, 5).map((item) => {
-      let fp = item.file;
-      if (fp.startsWith(workingDir)) fp = fp.slice(workingDir.length).replace(/^[/\\]/, "");
-      const icon = item.type === "function" ? t.brand("f") : item.type === "class" ? t.warn("C") : t.dim("-");
-      return `  ${icon} ${t.text(item.name + "()")} ${t.dim("in")} ${t.path(fp)}`;
-    }),
-    "",
-  ]);
-
-  let choice: string;
-  try {
-    const { select } = await import("@inquirer/prompts");
-    const answer = await select<string>({
-      message: t.brand("What would you like to do?"),
-      choices: [
-        { name: `${chalk.hex("#4ade80")("Continue")} ${t.dim("— proceed with limited context")}`, value: "continue" },
-        { name: `${chalk.hex("#d97757")("Refine")} ${t.dim("— see available code")}`, value: "refine" },
-        { name: `${t.dim("Cancel build")}`, value: "cancel" },
-      ],
-    });
-    choice = answer ?? "cancel";
-  } catch {
-    console.log(`  ${t.num("1.")} Continue anyway`);
-    console.log(`  ${t.num("2.")} Refine query ${t.dim("(see available code)")}`);
-    console.log(`  ${t.num("3.")} Cancel build`);
-    const text = await promptLine(`\n  ${t.brand(">")} `);
-    choice = { "1": "continue", "2": "refine", "3": "cancel" }[text] ?? "cancel";
-  }
-
-  if (choice === "continue") {
-    stepInfo("Proceeding with limited context");
-    return [true, null];
-  }
-
-  if (choice === "refine") {
-    await displayAvailableComponents(workingDir);
-    console.log();
-    const newQuery = await promptLine(`  ${t.brand(">")} New query ${t.dim("(or 'cancel')")}: `);
-    if (!newQuery || newQuery.toLowerCase() === "cancel") {
-      console.log(`\n  ${t.dim("Build cancelled.")}`);
-      return [false, null];
-    }
-    return [true, newQuery];
-  }
-
-  console.log(`\n  ${t.dim("Build cancelled.")}`);
-  return [false, null];
-}
-
-async function displayAvailableComponents(workingDir: string): Promise<void> {
-  const { getAvailableComponents } = await import("../builder/context-search.js");
-
-  let components: AvailableComponents;
-  try {
-    components = await getAvailableComponents(workingDir, 15);
-  } catch {
-    console.log(`\n  ${t.dim("Could not load available components.")}`);
-    return;
-  }
-
-  const lines: string[] = [];
-
-  if (components.functions.length > 0) {
-    lines.push(`${t.dim("Functions")} ${t.muted(`(${components.functions_total} total)`)}`);
-    for (const fn of components.functions) {
-      const sig = fn.signature ? t.dim(` ${fn.signature.slice(0, 50)}`) : "";
-      lines.push(`  ${t.brand("f")} ${t.text(fn.name + "()")}${sig}  ${t.muted(fn.file)}`);
-    }
-    if (components.functions_total > components.functions.length) {
-      lines.push(`  ${t.dim(`... and ${components.functions_total - components.functions.length} more`)}`);
-    }
-  }
-
-  if (components.classes.length > 0) {
-    if (lines.length) lines.push("");
-    lines.push(`${t.dim("Classes")} ${t.muted(`(${components.classes_total} total)`)}`);
-    for (const cls of components.classes) {
-      lines.push(`  ${t.warn("C")} ${t.text(cls.name)}  ${t.muted(cls.file)}`);
-    }
-    if (components.classes_total > components.classes.length) {
-      lines.push(`  ${t.dim(`... and ${components.classes_total - components.classes.length} more`)}`);
-    }
-  }
-
-  if (lines.length === 0) {
-    lines.push(t.dim(`No indexed components. Run ${t.cmd("synapse analyze")} first.`));
-  }
-
-  sectionBox("Available Code", "info", ["", ...lines, ""]);
-}
-
-// ---------------------------------------------------------------------------
-// Build stages display
-// ---------------------------------------------------------------------------
-
 
 // ---------------------------------------------------------------------------
 // Main entry
@@ -280,49 +48,52 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
 
   // 1. Init check
   if (!isInitialized(workingDir)) {
-    sectionBox("Not Initialized", "err", [
+    roundedBox("Not Initialized", "✖", t.err, [
       "Synapse is not initialized in this directory.",
+      "",
       `Run ${t.cmd("synapse init")} first.`,
     ]);
     return;
   }
 
-  // 2. Quota check
+  // 2. Quota check (best-effort)
   const apiKey = resolveApiKey(workingDir) ?? "";
   if (apiKey) {
     try {
       const { checkQuota } = await import("../grpc/telemetry.js");
       const [exceeded, msg] = await checkQuota(apiKey);
-      if (exceeded) { sectionBox("Quota Exceeded", "warn", [msg]); return; }
-    } catch { /* fail open */ }
+      if (exceeded) {
+        roundedBox("Quota Exceeded", "⚠", t.warn, [msg]);
+        return;
+      }
+    } catch {
+      /* fail open */
+    }
   }
 
-  // Check analysis
+  // 3. Analysis check
   const schemaPath = getProjectSchemaPath(workingDir);
   if (!fs.existsSync(schemaPath)) {
-    sectionBox("Analysis Required", "warn", [
+    roundedBox("Analysis Required", "⚠", t.warn, [
       "Project schema not found.",
+      "",
       `Run ${t.cmd("synapse analyze")} first.`,
     ]);
     return;
   }
 
-  // 3. Register parser
+  // 4. Register parser
   const { PythonParser } = await import("../parsers/python/index.js");
   const { registerParser } = await import("../parsers/registry.js");
   registerParser(new PythonParser());
 
-  // 4. Auto-sync index
-  const { ProgressIndicator } = await import("../ui/progress.js");
-  const spinner = new ProgressIndicator();
+  sectionHeader("Build MCP Server", "🏗️");
 
-  spinner.complete("Ready");
-
-  // Handle --generate-only
+  // 5. Handle --generate-only
   if (opts.generateOnly) {
     const todoPath = path.join(synapseDir, "todo_list.md");
     if (!fs.existsSync(todoPath)) {
-      sectionBox("Missing Todo List", "err", [
+      roundedBox("Missing Todo List", "✖", t.err, [
         `Cannot use ${t.cmd("--generate")}: todo_list.md not found.`,
         `Run ${t.cmd("synapse build")} without --generate first.`,
       ]);
@@ -330,38 +101,25 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
     }
     stepInfo("Generate mode", "using existing todo_list.md");
     const todoContent = fs.readFileSync(todoPath, "utf-8");
-    return runGeneration(workingDir, schemaPath, opts, "Generate from existing todo_list.md", null, todoContent);
+    return runGeneration(
+      workingDir,
+      schemaPath,
+      opts,
+      "Generate from existing todo_list.md",
+      null,
+      todoContent,
+    );
   }
 
-  // 5. Discover use cases via exploratory agent
+  // 6. Discover use cases (agentic) — unless --query provided
   const projectSchema = fs.readFileSync(schemaPath, "utf-8");
-
-  interface DiscoveredUseCase { title: string; description: string; functions: string[]; module: string; }
-  let useCases: DiscoveredUseCase[] = [];
+  let useCases: UseCaseChoice[] = [];
   let finalQuery: string | undefined = opts.query;
 
   if (!finalQuery) {
-    const discoverStart = Date.now();
-    const frames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-    let frameIdx = 0;
-    let lastLen = 0;
+    const spinner = new Spinner("orbital");
     let toolCalls = 0;
-
-    const fmtTime = (ms: number) => {
-      const secs = Math.floor(ms / 1000);
-      if (secs < 60) return `${secs}s`;
-      return `${Math.floor(secs / 60)}m ${secs % 60}s`;
-    };
-
-    const discoverInterval = setInterval(() => {
-      frameIdx = (frameIdx + 1) % frames.length;
-      const elapsed = fmtTime(Date.now() - discoverStart);
-      const calls = toolCalls > 0 ? `  ${t.num(`${toolCalls} calls`)}` : "";
-      const line = `  ${t.brand(frames[frameIdx])}  Exploring codebase  ${t.dim(elapsed)}${calls}`;
-      const plainLen = line.replace(/\x1b\[[0-9;]*m/g, "").length;
-      process.stdout.write(`\r${" ".repeat(lastLen + 2)}\r${line}`);
-      lastLen = plainLen;
-    }, 80);
+    spinner.start(`${pickVerb()} your codebase`);
 
     try {
       const { SynapseClient } = await import("../grpc/client.js");
@@ -375,102 +133,72 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
 
       const result = await client.discoverUseCases(projectSchema, (info) => {
         toolCalls = info.toolCalls;
+        spinner.updateMeta({
+          extra: toolCalls > 0 ? `${toolCalls} ${toolCalls === 1 ? "call" : "calls"}` : "",
+        });
       });
 
-      clearInterval(discoverInterval);
-      process.stdout.write(`\r${" ".repeat(lastLen + 2)}\r`);
-
       if (result.error) {
-        console.log(`  ${t.warn("!")}  Discovery failed: ${result.error}`);
+        spinner.fail("Discovery failed", result.error);
       } else {
         useCases = result.useCases;
-        console.log(`  ${t.ok("✓")}  Discovered ${t.num(String(useCases.length))} use cases  ${t.dim(fmtTime(Date.now() - discoverStart))}`);
+        spinner.complete(
+          `Discovered ${useCases.length} ${useCases.length === 1 ? "use case" : "use cases"}`,
+        );
       }
     } catch (e) {
-      clearInterval(discoverInterval);
-      process.stdout.write(`\r${" ".repeat(lastLen + 2)}\r`);
-      console.log(`  ${t.warn("!")}  Discovery error: ${e}`);
+      spinner.fail("Discovery error", String(e));
     }
   }
 
-  // 6. Use case selection
+  // 7. Use case selection
   let customSelected = false;
 
   if (finalQuery) {
     stepBrand("Using provided query", `"${finalQuery}"`);
   } else if (useCases.length > 0) {
-    try {
-      const { checkbox } = await import("@inquirer/prompts");
-      const chalk = (await import("chalk")).default;
+    const { selected, customSelected: cs } = await selectUseCases(useCases);
+    customSelected = cs;
 
-      sectionHeader("Select Use Cases");
+    if (selected.length > 0) {
       console.log();
-
-      const choices = [
-        {
-          name: `${chalk.hex("#a5b4fc").bold("Custom requirement")} ${t.dim("— describe what you need")}`,
-          value: "__CUSTOM__",
-          checked: false,
-        },
-        ...useCases.map((uc, i) => ({
-          name: `${chalk.hex("#d97757").bold(uc.title)} ${t.dim("—")} ${t.text(uc.description)}  ${t.muted(`(${uc.functions.length} functions)`)}`,
-          value: String(i),
-          checked: false,
-        })),
-      ];
-
-      const selected = await checkbox<string>({
-        message: t.brand("Choose use cases to build as MCP tools:"),
-        choices,
-        loop: false,
-      });
-
-      customSelected = selected.includes("__CUSTOM__");
-      const selectedUseCases = selected
-        .filter((v) => v !== "__CUSTOM__")
-        .map((v) => useCases[parseInt(v, 10)]);
-
-      if (selectedUseCases.length > 0) {
-        console.log();
-        console.log(`  ${t.brandBold(`${selectedUseCases.length} use case(s) selected`)}`);
-        for (const uc of selectedUseCases) {
-          console.log(`  ${t.brand(">")} ${t.text(uc.title)} ${t.dim(`(${uc.functions.join(", ")})`)}`);
-        }
-
-        // Build a query from selected use cases
-        const ucDescs = selectedUseCases.map((uc) =>
-          `- ${uc.title}: ${uc.description} (functions: ${uc.functions.join(", ")})`
-        );
-        finalQuery = "Create MCP tools for the following use cases:\n\n" + ucDescs.join("\n");
-      } else if (!customSelected) {
-        stepWarn("No selection made", "switching to custom mode");
-        customSelected = true;
+      console.log(`  ${t.brandBold(`${selected.length} use case(s) selected`)}`);
+      for (const uc of selected) {
+        console.log(`  ${t.brand("›")} ${t.text(uc.title)} ${t.dim(`(${uc.functions.join(", ")})`)}`);
       }
-    } catch (e) {
-      stepWarn("Interactive selection failed", String(e));
-      // Fallback: build for all use cases
-      const allFuncs = useCases.flatMap((uc) => uc.functions);
-      finalQuery = `Create MCP tools wrapping: ${allFuncs.slice(0, 10).join(", ")}`;
+
+      const ucDescs = selected.map(
+        (uc) =>
+          `- ${uc.title}: ${uc.description} (functions: ${uc.functions.join(", ")})`,
+      );
+      finalQuery = "Create MCP tools for the following use cases:\n\n" + ucDescs.join("\n");
+    } else if (!customSelected) {
+      stepWarn("No selection made", "switching to custom mode");
+      customSelected = true;
     }
   } else {
     stepInfo("No use cases discovered", "switching to custom query mode");
     customSelected = true;
   }
 
-  // 7. Custom query prompt (if no use case selected and no --query)
+  // 8. Custom query prompt
   if (customSelected && !finalQuery) {
     console.log();
     console.log(`  ${t.brandBold("Describe your MCP server requirements")}`);
     console.log(`  ${t.dim("Be specific about the functionality to expose.")}`);
     console.log();
     console.log(`  ${t.dim("Examples:")}`);
-    console.log(`    ${t.muted("\"Create tools for file operations and directory listing\"")}`);
-    console.log(`    ${t.muted("\"Expose database query and data retrieval functions\"")}`);
+    console.log(`    ${t.subtle('"Create tools for file operations and directory listing"')}`);
+    console.log(`    ${t.subtle('"Expose database query and data retrieval functions"')}`);
     console.log();
 
-    finalQuery = await promptLine(`  ${t.brand(">")} `);
+    finalQuery = await styledInput({
+      message: "Requirements",
+      placeholder: "e.g. Create tools for user auth and profile management",
+    });
+
     if (!finalQuery || finalQuery.trim().length < 10) {
-      sectionBox("Query Too Short", "warn", [
+      roundedBox("Query Too Short", "⚠", t.warn, [
         "Please provide at least 10 characters.",
       ]);
       return;
@@ -478,27 +206,32 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
   }
 
   if (!finalQuery) {
-    sectionBox("No Input", "warn", [
+    roundedBox("No Input", "⚠", t.warn, [
       "No use cases selected and no query provided.",
+      "",
       `Use ${t.cmd("synapse build --query '<requirements>'")}`,
     ]);
     return;
   }
 
-  // 8. Build context bundle (custom query mode — let backend retrieve)
-  let contextBundle: Record<string, unknown> | null = null;
-  contextBundle = { endpoints: [], project_name: path.basename(workingDir), mode: "custom_prompt" };
-  stepOk("Ready", "backend will explore and build");
+  // 9. Build context bundle (empty — backend does agentic retrieval)
+  const contextBundle: Record<string, unknown> = {
+    endpoints: [],
+    project_name: path.basename(workingDir),
+    mode: "custom_prompt",
+  };
 
   // Inject CONTEXT.md if available
   const contextMdPath = getContextMdPath(workingDir);
   if (fs.existsSync(contextMdPath)) {
     try {
       contextBundle.project_context = fs.readFileSync(contextMdPath, "utf-8");
-    } catch { /* non-fatal */ }
+    } catch {
+      /* non-fatal */
+    }
   }
 
-  // 9. Generation
+  // 10. Generation
   return runGeneration(workingDir, schemaPath, opts, finalQuery, contextBundle, null);
 }
 
@@ -517,18 +250,25 @@ async function runGeneration(
   const projectSchema = fs.readFileSync(schemaPath, "utf-8");
   let currentStage = "";
 
-  sectionHeader("Building MCP Server");
+  sectionHeader("Generating", "⚡");
 
-  const { BuildProgressUI } = await import("../ui/build-progress.js");
-  const state = { progress: null as InstanceType<typeof BuildProgressUI> | null };
+  // Two-phase progress: a Spinner for pre-generation stages (retrieve, verify)
+  // and CodeGenerationUI once the "generating" stage begins.
+  const state = {
+    spinner: null as Spinner | null,
+    genUI: null as CodeGenerationUI | null,
+    toolCalls: 0,
+  };
   const genStartTime = Date.now();
 
   const STAGE_DISPLAY: Record<string, string> = {
-    retrieving: "Analyzing codebase",
-    generating: "Generating code",
+    retrieving: "Exploring codebase",
+    generating: "Generating MCP server",
     verifying: "Verifying output",
     planning: "Planning",
     initializing: "Initializing",
+    exploring: "Exploring codebase",
+    retrying: "Network congested — retrying on backup model",
   };
 
   const onStatus = (stage: string, _message: string, _progress: number) => {
@@ -536,29 +276,49 @@ async function runGeneration(
     if (s === currentStage) return;
     currentStage = s;
 
-    if (!state.progress && s !== "complete") {
-      state.progress = new BuildProgressUI();
-      state.progress.start(genStartTime);
-    }
-
-    if (s === "complete" && state.progress) {
-      state.progress.complete();
-      state.progress = null;
+    // Complete signal from backend — clean up whatever's running
+    if (s === "complete") {
+      if (state.genUI) {
+        state.genUI.complete();
+        state.genUI = null;
+      } else if (state.spinner) {
+        state.spinner.complete();
+        state.spinner = null;
+      }
       return;
     }
 
-    if (state.progress) {
-      state.progress.updateStage(STAGE_DISPLAY[s] || s);
+    // Transition to CodeGenerationUI once actual generation starts
+    if (s === "generating" && !state.genUI) {
+      if (state.spinner) {
+        state.spinner.stop();
+        state.spinner = null;
+      }
+      state.genUI = new CodeGenerationUI();
+      state.genUI.start(genStartTime);
+      return;
+    }
+
+    // Pre-generation stages use the plain orbital spinner
+    if (!state.genUI) {
+      if (!state.spinner) {
+        state.spinner = new Spinner("orbital");
+        state.spinner.resetTimer();
+        state.spinner.start(STAGE_DISPLAY[s] ?? s);
+      } else {
+        state.spinner.updateMessage(STAGE_DISPLAY[s] ?? s);
+      }
     }
   };
 
   const onToolCall = (_toolName: string, _result: unknown) => {
-    if (state.progress) {
-      state.progress.incrementToolCalls();
+    state.toolCalls++;
+    if (state.spinner) {
+      state.spinner.updateMeta({
+        extra: `${state.toolCalls} ${state.toolCalls === 1 ? "call" : "calls"}`,
+      });
     }
   };
-
-  console.log();
 
   try {
     const { SynapseClient } = await import("../grpc/client.js");
@@ -571,27 +331,35 @@ async function runGeneration(
     });
 
     const result = await client.build({
-      query, projectSchema,
-      outputFile: opts.output, validate: opts.validate,
-      docs: opts.docs, generateOnly: opts.generateOnly,
+      query,
+      projectSchema,
+      outputFile: opts.output,
+      validate: opts.validate,
+      docs: opts.docs,
+      generateOnly: opts.generateOnly,
       todoListContent: todoListContent ?? undefined,
       contextBundle: contextBundle ?? undefined,
       callbacks: { onStatus, onToolCall },
     });
 
-    if (state.progress) {
-      state.progress.complete();
-      state.progress = null;
+    // Ensure UIs are stopped
+    if (state.genUI) {
+      state.genUI.complete();
+      state.genUI = null;
+    }
+    if (state.spinner) {
+      state.spinner.complete();
+      state.spinner = null;
     }
 
     if (!result.success) {
-      sectionBox("Build Failed", "err", [
+      roundedBox("Build Failed", "✖", t.err, [
         result.error ?? "Unknown error",
       ]);
       return;
     }
 
-    // Telemetry: build event
+    // Telemetry
     const toolCount = result.toolCount ?? 0;
     if (toolCount > 0) {
       try {
@@ -599,24 +367,59 @@ async function runGeneration(
         if (resolvedKey) {
           const { trackEvent } = await import("../grpc/telemetry.js");
           const durationMs = Date.now() - genStartTime;
-          trackEvent("build", resolvedKey, workingDir, 0, toolCount, 0, durationMs).catch(() => {});
+          trackEvent("build", resolvedKey, workingDir, 0, toolCount, 0, durationMs).catch(
+            () => {},
+          );
         }
-      } catch { /* optional */ }
+      } catch {
+        /* optional */
+      }
     }
 
     // Write output
     if (result.serverCode) {
-      fs.writeFileSync(path.join(workingDir, opts.output), result.serverCode, "utf-8");
+      fs.writeFileSync(
+        path.join(workingDir, opts.output),
+        result.serverCode,
+        "utf-8",
+      );
     }
 
-    // Success display
-    const absOutput = path.resolve(workingDir, opts.output);
-
-    // Detect required env vars from generated code
-    const envVarMatches = (result.serverCode ?? "").matchAll(/os\.getenv\(["']([A-Z_][A-Z0-9_]*)["']/g);
+    // Detect env vars from generated code
+    const envVarMatches = (result.serverCode ?? "").matchAll(
+      /os\.getenv\(["']([A-Z_][A-Z0-9_]*)["']/g,
+    );
     const envVars = [...new Set([...envVarMatches].map((m) => m[1]))];
 
-    // Build MCP config with env vars included
+    // Success box
+    const boxLines: string[] = [];
+    boxLines.push(`${t.dim("Tools:")}     ${t.num(String(result.toolCount ?? 0))}`);
+    boxLines.push(`${t.dim("Resources:")} ${t.num(String(result.resourceCount ?? 0))}`);
+    boxLines.push(`${t.dim("Output:")}    ${t.path(opts.output)}`);
+    // Session id — quote this when reporting an issue; matches Langfuse trace.
+    if ((result as any).sessionId) {
+      boxLines.push(`${t.dim("Session:")}   ${t.subtle((result as any).sessionId)}`);
+    }
+
+    if (envVars.length > 0) {
+      boxLines.push("");
+      boxLines.push(`${t.dim("Required environment variables:")}`);
+      for (const v of envVars) {
+        boxLines.push(`  ${t.warn(BULLET)} ${t.cmd(v)}`);
+      }
+    }
+
+    boxLines.push("");
+    boxLines.push(`${t.dim("Next steps:")}`);
+    boxLines.push(`  ${t.num("1.")} Review the generated server code`);
+    boxLines.push(`  ${t.num("2.")} ${t.cmd("pip install mcp")}`);
+    boxLines.push(`  ${t.num("3.")} ${t.cmd(`python ${opts.output}`)}`);
+
+    console.log();
+    roundedBox("MCP Server Generated", "✓", t.ok, boxLines);
+
+    // MCP client config — printed outside the box, copy-paste friendly
+    const absOutput = path.resolve(workingDir, opts.output);
     const mcpServerConfig: Record<string, unknown> = {
       command: "python",
       args: [absOutput],
@@ -626,42 +429,38 @@ async function runGeneration(
       for (const v of envVars) envObj[v] = "";
       mcpServerConfig.env = envObj;
     }
-    const configSnippet = JSON.stringify({ mcpServers: { "custom-server": mcpServerConfig } }, null, 2);
-
-    const lines = [
-      "",
-      `${t.dim("Tools")}       ${t.num(String(result.toolCount ?? 0))}`,
-      `${t.dim("Resources")}   ${t.num(String(result.resourceCount ?? 0))}`,
-      `${t.dim("Output")}      ${t.path(opts.output)}`,
-      "",
-    ];
-
-    if (envVars.length > 0) {
-      lines.push(`${t.dim("Required environment variables:")}`);
-      for (const v of envVars) {
-        lines.push(`  ${t.warn("•")} ${t.cmd(v)}`);
-      }
-      lines.push(`  ${t.dim("Set these in a .env file or export them before running the server.")}`);
-      lines.push("");
-    }
-
-    lines.push(
-      `${t.dim("Next steps:")}`,
-      `  ${t.num("1.")} Review the generated server code`,
-      `  ${t.num("2.")} ${t.cmd("pip install mcp")}`,
-      `  ${t.num("3.")} ${t.cmd(`python ${opts.output}`)}`,
-      "",
-      `${t.dim("MCP client config:")}`,
-      ...configSnippet.split("\n").map((line) => `  ${t.muted(line)}`),
-      "",
+    const configSnippet = JSON.stringify(
+      { mcpServers: { "custom-server": mcpServerConfig } },
+      null,
+      2,
     );
 
-    sectionBox("MCP Server Generated", "ok", lines);
-  } catch (e) {
-    if (state.progress) {
-      state.progress.stop();
-      state.progress = null;
+    console.log();
+    console.log(`  ${t.dim("Add this to your MCP client config:")}`);
+    console.log();
+    for (const line of configSnippet.split("\n")) {
+      console.log(`    ${t.subtle(line)}`);
     }
-    sectionBox("Build Error", "err", [String(e)]);
+    console.log();
+
+    // Env var reminder — outside the box, more visible
+    if (envVars.length > 0) {
+      stepWarn(
+        `Set ${envVars.length} environment variable${envVars.length === 1 ? "" : "s"} before running:`,
+        envVars.join(", "),
+      );
+      console.log();
+    }
+    stepOk("Done");
+  } catch (e) {
+    if (state.genUI) {
+      state.genUI.stop();
+      state.genUI = null;
+    }
+    if (state.spinner) {
+      state.spinner.stop();
+      state.spinner = null;
+    }
+    roundedBox("Build Error", "✖", t.err, [String(e)]);
   }
 }

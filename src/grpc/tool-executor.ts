@@ -5,8 +5,12 @@
  * it sends a ToolCallRequest. This executor handles those requests
  * and returns the results.
  *
- * Ported from Python grpc_client/tool_executor.py.
+ * All paths from the backend are resolved against `this.workingDir`
+ * (not process.cwd()) so `synapse build --dev` invoked from a different
+ * directory still touches the target project, not the CLI's launch dir.
  */
+
+import path from "node:path";
 
 export interface ToolResult {
   success: boolean;
@@ -38,6 +42,15 @@ export class ToolExecutor {
   }
 
   /**
+   * Resolve a relative path against this executor's `workingDir`.
+   * Absolute paths pass through unchanged. Empty strings return `workingDir`.
+   */
+  private resolvePath(input: string | undefined): string {
+    if (!input) return this.workingDir;
+    return path.isAbsolute(input) ? input : path.resolve(this.workingDir, input);
+  }
+
+  /**
    * Execute a tool by name with the given parameters.
    *
    * Returns a ToolResult with success/result/error fields matching
@@ -65,7 +78,7 @@ export class ToolExecutor {
   ): Promise<Record<string, unknown>> {
     const { readFile } = await import("../tools/read-file.js");
 
-    const targetFile = (params.target_file as string) ?? "";
+    const targetFile = this.resolvePath((params.target_file as string) ?? "");
     const startLine =
       (params.start_line_one_indexed as number) || undefined;
     const endLine =
@@ -81,7 +94,7 @@ export class ToolExecutor {
   ): Promise<Record<string, unknown>> {
     const { writeFile } = await import("../tools/write-file.js");
 
-    const targetFile = (params.target_file as string) ?? "";
+    const targetFile = this.resolvePath((params.target_file as string) ?? "");
     const content = (params.content as string) ?? "";
     return writeFile(targetFile, content);
   }
@@ -91,7 +104,7 @@ export class ToolExecutor {
   ): Promise<Record<string, unknown>> {
     const { replaceFile } = await import("../tools/replace-file.js");
 
-    const targetFile = (params.target_file as string) ?? "";
+    const targetFile = this.resolvePath((params.target_file as string) ?? "");
     const startLine = (params.start_line as number) ?? 1;
     const endLine = (params.end_line as number) ?? 1;
     const content = (params.content as string) ?? "";
@@ -111,7 +124,7 @@ export class ToolExecutor {
   ): Promise<Record<string, unknown>> {
     const { insertFile } = await import("../tools/insert-file.js");
 
-    const targetFile = (params.target_file as string) ?? "";
+    const targetFile = this.resolvePath((params.target_file as string) ?? "");
     const content = (params.content as string) ?? "";
     const lineNumber = (params.line_number as number) || undefined;
 
@@ -142,8 +155,7 @@ export class ToolExecutor {
   ): Promise<Record<string, unknown>> {
     const { findFiles } = await import("../tools/find-files.js");
     const pattern = (params.pattern as string) || "**/*";
-    const directory = (params.directory as string) || this.workingDir;
-    const baseDir = directory.startsWith("/") ? directory : this.workingDir;
+    const baseDir = this.resolvePath((params.directory as string) ?? "");
     return findFiles(pattern, baseDir) as unknown as Record<string, unknown>;
   }
 
@@ -153,8 +165,13 @@ export class ToolExecutor {
     const { grepSearch } = await import("../tools/grep-search.js");
     const pattern = (params.pattern as string) || "";
     if (!pattern) throw new Error("pattern is required");
+    // Resolve optional `path` against workingDir so absolute paths escape
+    // safely and relative paths land in the project, not process.cwd().
+    const scopePath = params.path
+      ? this.resolvePath(params.path as string)
+      : undefined;
     return grepSearch(pattern, this.workingDir, {
-      path: params.path as string | undefined,
+      path: scopePath,
       file_type: params.file_type as string | undefined,
       context_lines: (params.context_lines as number) || 0,
       max_results: (params.max_results as number) || 100,
@@ -167,9 +184,15 @@ export class ToolExecutor {
     params: Record<string, unknown>,
   ): Promise<Record<string, unknown>> {
     const { listSymbols } = await import("../tools/list-symbols.js");
+    const filePath = params.file_path
+      ? this.resolvePath(params.file_path as string)
+      : undefined;
+    const directory = params.directory
+      ? this.resolvePath(params.directory as string)
+      : undefined;
     return listSymbols(this.workingDir, {
-      file_path: params.file_path as string | undefined,
-      directory: params.directory as string | undefined,
+      file_path: filePath,
+      directory,
       pattern: params.pattern as string | undefined,
     }) as unknown as Record<string, unknown>;
   }
@@ -180,8 +203,11 @@ export class ToolExecutor {
     const { findDefinition } = await import("../tools/find-definition.js");
     const symbol = (params.symbol as string) || "";
     if (!symbol) throw new Error("symbol is required");
+    const scope = params.scope
+      ? this.resolvePath(params.scope as string)
+      : undefined;
     return findDefinition(symbol, this.workingDir, {
-      scope: params.scope as string | undefined,
+      scope,
     }) as unknown as Record<string, unknown>;
   }
 

@@ -1,5 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import { SYMBOL_PATTERNS } from "./file-types.js";
+
+// Union of every extension we know how to parse for symbols.
+// Sourced from the shared file-types registry so adding a language is
+// one entry there, not here.
+const CODE_EXTS = new Set(Object.keys(SYMBOL_PATTERNS));
 
 export interface DefinitionResult {
   file: string;
@@ -85,7 +91,7 @@ export function findDefinition(
         walk(path.join(dir, entry.name));
       } else if (entry.isFile()) {
         const ext = path.extname(entry.name).toLowerCase();
-        if ([".py", ".ts", ".tsx", ".js", ".jsx", ".go", ".rs", ".java", ".cs"].includes(ext)) {
+        if (CODE_EXTS.has(ext)) {
           searchFile(path.join(dir, entry.name));
         }
       }

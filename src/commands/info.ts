@@ -16,69 +16,61 @@ import {
   getApiKeyDisplay,
   resolveApiKey,
 } from "../config/manager.js";
-import {
-  t,
-  sectionHeader,
-  kvLine,
-  stepWarn,
-  hrLine,
-} from "../ui/theme.js";
+import { t, sectionHeader, stepWarn } from "../ui/theme.js";
+import { kvGrid, type KvRow } from "../ui/kv-grid.js";
+import { EMOJI } from "../ui/icons.js";
 
 export async function runInfo(): Promise<void> {
   const workingDir = process.cwd();
   const synapseDir = getProjectSynapseDir(workingDir);
 
-  sectionHeader("Synapse Info");
-  console.log();
+  sectionHeader("Synapse Info", EMOJI.info);
 
-  // ── Project Status ──────────────────────────────────────────
   printProjectStatus(workingDir, synapseDir);
-
-  // ── Account Quota ───────────────────────────────────────────
+  console.log();
   await printQuota(workingDir);
-
   console.log();
 }
 
 function printProjectStatus(workingDir: string, _synapseDir: string): void {
-  console.log(`  ${t.bold("Project")}`);
-  console.log(`  ${hrLine(50)}`);
+  console.log(`  ${t.brandBold("Project")}`);
+  console.log();
 
   if (!isInitialized(workingDir)) {
-    kvLine("Status", "Not initialized");
-    console.log(`  ${t.dim("Run")} ${t.cmd("synapse init")} ${t.dim("to get started.")}`);
+    kvGrid([{ key: "Status", value: "Not initialized" }]);
     console.log();
+    console.log(
+      `  ${t.dim("Run")} ${t.cmd("synapse init")} ${t.dim("to get started.")}`,
+    );
     return;
   }
 
-  kvLine("Status", "Initialized");
+  const rows: KvRow[] = [{ key: "Status", value: t.ok("Initialized") }];
 
   try {
     const config = loadConfig(workingDir);
-    kvLine("Version", config.version ?? "—");
-
+    rows.push({ key: "Version", value: config.version ?? "—" });
     const created = config.created_at ?? "";
     if (created) {
       try {
         const dt = new Date(created);
-        const formatted = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")} ${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}`;
-        kvLine("Created", formatted);
+        const formatted =
+          `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-` +
+          `${String(dt.getDate()).padStart(2, "0")} ` +
+          `${String(dt.getHours()).padStart(2, "0")}:${String(dt.getMinutes()).padStart(2, "0")}`;
+        rows.push({ key: "Created", value: formatted });
       } catch {
-        kvLine("Created", created);
+        rows.push({ key: "Created", value: created });
       }
     }
   } catch {
-    // Config not found
+    /* config not found */
   }
 
   const [projDisplay, globalDisplay] = getApiKeyDisplay(workingDir);
-  if (projDisplay) {
-    kvLine("API key", `${projDisplay} (project)`);
-  } else if (globalDisplay) {
-    kvLine("API key", `${globalDisplay} (global)`);
-  } else {
-    kvLine("API key", "Not set");
-  }
+  if (projDisplay) rows.push({ key: "API key", value: `${projDisplay} ${t.dim("(project)")}` });
+  else if (globalDisplay) rows.push({ key: "API key", value: `${globalDisplay} ${t.dim("(global)")}` });
+  else rows.push({ key: "API key", value: t.subtle("Not set") });
 
   // Analysis stats
   const statsPath = getStatisticsPath(workingDir);
@@ -89,14 +81,20 @@ function printProjectStatus(workingDir: string, _synapseDir: string): void {
       const files = stats.file_count ?? 0;
       const classes = stats.class_count ?? 0;
       const funcs = stats.function_count ?? 0;
-      kvLine("Analyzed", `${files} files · ${classes} classes · ${funcs} functions`);
+      rows.push({
+        key: "Analyzed",
+        value: `${t.num(String(files))} files ${t.dim("·")} ${t.num(String(classes))} classes ${t.dim("·")} ${t.num(String(funcs))} functions`,
+      });
     } catch {
-      // Ignore parse errors
+      /* ignore parse errors */
     }
   } else if (fs.existsSync(schemaPath)) {
-    kvLine("Analyzed", "Yes");
+    rows.push({ key: "Analyzed", value: t.ok("Yes") });
   } else {
-    kvLine("Analyzed", `Not yet  (run 'synapse analyze')`);
+    rows.push({
+      key: "Analyzed",
+      value: `${t.subtle("Not yet")} ${t.dim(`(run ${t.cmd("synapse analyze")})`)}`,
+    });
   }
 
   // Index metadata
@@ -105,23 +103,23 @@ function printProjectStatus(workingDir: string, _synapseDir: string): void {
     try {
       const meta = JSON.parse(fs.readFileSync(indexMetaPath, "utf-8"));
       const count = Array.isArray(meta) ? meta.length : Object.keys(meta).length;
-      kvLine("Indexed files", String(count));
+      rows.push({ key: "Indexed files", value: String(count), numeric: true });
     } catch {
-      // Ignore
+      /* ignore */
     }
   }
 
-  console.log();
+  kvGrid(rows);
 }
 
 async function printQuota(workingDir: string): Promise<void> {
   const apiKey = resolveApiKey(workingDir);
 
-  console.log(`  ${t.bold("Account Quota")}`);
-  console.log(`  ${hrLine(50)}`);
+  console.log(`  ${t.brandBold("Account Quota")}`);
+  console.log();
 
   if (!apiKey) {
-    console.log(`  ${t.dim("Not available (no API key configured)")}`);
+    console.log(`  ${t.subtle("Not available (no API key configured)")}`);
     return;
   }
 
@@ -129,19 +127,28 @@ async function printQuota(workingDir: string): Promise<void> {
   const info = await getQuotaInfo(apiKey);
 
   if (!info) {
-    console.log(`  ${t.dim("Could not reach backend — check your connection.")}`);
+    console.log(`  ${t.subtle("Could not reach backend — check your connection.")}`);
     return;
   }
 
   const serversUsed = info.mcpServersCount;
   const serversMax = info.maxMcpServers;
   const serversRemaining = Math.max(0, serversMax - serversUsed);
-  kvLine("MCP servers", `${serversUsed} / ${serversMax} used  (${serversRemaining} remaining)`);
 
   const linesUsed = info.linesIndexed;
   const linesMax = info.maxLinesIndexed;
   const linesRemaining = Math.max(0, linesMax - linesUsed);
-  kvLine("Lines indexed", `${fmtNumber(linesUsed)} / ${fmtNumber(linesMax)}  (${fmtNumber(linesRemaining)} remaining)`);
+
+  kvGrid([
+    {
+      key: "MCP servers",
+      value: `${t.num(String(serversUsed))} / ${t.num(String(serversMax))} used  ${t.dim(`(${serversRemaining} remaining)`)}`,
+    },
+    {
+      key: "Lines indexed",
+      value: `${t.num(fmtNumber(linesUsed))} / ${t.num(fmtNumber(linesMax))}  ${t.dim(`(${fmtNumber(linesRemaining)} remaining)`)}`,
+    },
+  ]);
 
   if (info.quotaExceeded) {
     console.log();

@@ -94,6 +94,17 @@ function shouldUseSecure(host: string, port: number): boolean {
   return false;
 }
 
+/**
+ * Generate a compact human-readable session id (`sess_<12chars>`).
+ * Users can quote this when reporting issues; backend echoes it into
+ * Langfuse traces and telemetry rows for cross-referencing.
+ */
+function _generateSessionId(): string {
+  const rand = Math.random().toString(36).slice(2, 8);
+  const ts = Date.now().toString(36).slice(-6);
+  return `sess_${ts}${rand}`;
+}
+
 /** Standard channel options shared across all calls. */
 const CHANNEL_OPTIONS = {
   "grpc.max_send_message_length": MAX_MESSAGE_SIZE,
@@ -372,10 +383,17 @@ export class SynapseClient {
     todoListContent?: string;
     contextBundle?: Record<string, unknown>;
     callbacks?: BuildCallbacks;
-  }): Promise<BuildResult> {
+    /** Session identifier — surfaces in Langfuse traces + on the CLI success box. */
+    sessionId?: string;
+  }): Promise<BuildResult & { sessionId: string }> {
     const grpc = await import("@grpc/grpc-js");
     const { loadProto } = await import("./proto-loader.js");
     const { SynapseService } = loadProto();
+
+    // Per-build session id — shared with the backend so Langfuse traces line
+    // up with what the user sees in the CLI. Backend echoes it into
+    // status_updates and telemetry rows.
+    const sessionId = opts.sessionId ?? _generateSessionId();
 
     const target = `${this.host}:${this.port}`;
     const credentials = shouldUseSecure(this.host, this.port)
@@ -392,16 +410,18 @@ export class SynapseClient {
         error:
           "Missing API key. Set one with: synapse init, synapse config --key <KEY>, " +
           "or set SYNAPSE_API_KEY in the environment.",
+        sessionId,
       };
     }
 
     const metadata = new grpc.Metadata();
     metadata.set("x-api-key", apiKey);
 
-    return new Promise<BuildResult>((resolve) => {
-      let finalResult: BuildResult = {
+    return new Promise<BuildResult & { sessionId: string }>((resolve) => {
+      let finalResult: BuildResult & { sessionId: string } = {
         success: false,
         error: "No response received",
+        sessionId,
       };
 
       // Open the bidirectional stream
@@ -410,7 +430,7 @@ export class SynapseClient {
       // Send the initial BuildMessage with build_request payload
       call.write({
         build_request: {
-          request_id: "",
+          request_id: sessionId,
           query: opts.query,
           project_schema: opts.projectSchema,
           working_dir: this.workingDir,
@@ -481,6 +501,7 @@ export class SynapseClient {
             resourceCount: res.resource_count,
             documentation: res.documentation,
             todoList: res.todo_list,
+            sessionId,
           };
           // Server has delivered the final result; close client side
           call.end();
@@ -489,6 +510,7 @@ export class SynapseClient {
             success: false,
             error: msg.error.message,
             errorCode: msg.error.code,
+            sessionId,
           };
           call.end();
         }
@@ -504,6 +526,7 @@ export class SynapseClient {
         resolve({
           success: false,
           error: `gRPC error: ${err.code ?? "UNKNOWN"}: ${err.details ?? err.message}`,
+          sessionId,
         });
       });
     });

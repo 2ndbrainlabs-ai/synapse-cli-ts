@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { extensionsFor } from "./file-types.js";
 
 export interface UsageMatch {
   file: string;
@@ -39,16 +40,7 @@ export function findUsages(
     new RegExp(`^type\\s+${escaped}\\s+`),
   ];
 
-  const FILE_TYPE_EXTS: Record<string, string[]> = {
-    py: [".py"], python: [".py"],
-    ts: [".ts", ".tsx"], typescript: [".ts", ".tsx"],
-    js: [".js", ".jsx"], javascript: [".js", ".jsx"],
-    go: [".go"], java: [".java"], rust: [".rs"],
-  };
-
-  const allowedExts = opts.file_type
-    ? FILE_TYPE_EXTS[opts.file_type.toLowerCase()] ?? null
-    : null;
+  const allowedExts = extensionsFor(opts.file_type);
 
   const usages: UsageMatch[] = [];
 

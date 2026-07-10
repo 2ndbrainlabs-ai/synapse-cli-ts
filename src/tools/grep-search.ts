@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { extensionsFor } from "./file-types.js";
 
 export interface GrepMatch {
   file: string;
@@ -30,29 +31,6 @@ const SKIP_DIRS = new Set([
   ".tox", ".pytest_cache", ".mypy_cache",
 ]);
 
-const FILE_TYPE_MAP: Record<string, string[]> = {
-  py: [".py"],
-  python: [".py"],
-  ts: [".ts", ".tsx"],
-  typescript: [".ts", ".tsx"],
-  js: [".js", ".jsx"],
-  javascript: [".js", ".jsx"],
-  go: [".go"],
-  java: [".java"],
-  rust: [".rs"],
-  rb: [".rb"],
-  ruby: [".rb"],
-  cs: [".cs"],
-  csharp: [".cs"],
-  cpp: [".cpp", ".cc", ".cxx", ".h", ".hpp"],
-  c: [".c", ".h"],
-  json: [".json"],
-  yaml: [".yaml", ".yml"],
-  toml: [".toml"],
-  md: [".md"],
-  sql: [".sql"],
-};
-
 export function grepSearch(
   pattern: string,
   baseDir: string,
@@ -68,7 +46,7 @@ export function grepSearch(
   } = opts;
 
   const searchDir = subPath ? path.resolve(baseDir, subPath) : baseDir;
-  const allowedExts = file_type ? FILE_TYPE_MAP[file_type.toLowerCase()] ?? null : null;
+  const allowedExts = extensionsFor(file_type);
 
   let regex: RegExp;
   try {
