@@ -10,6 +10,7 @@
  */
 
 import { t, displayWidth } from "./theme.js";
+import { BOX } from "./icons.js";
 
 export interface KvRow {
   key: string;
@@ -20,16 +21,28 @@ export interface KvRow {
   icon?: string;
 }
 
-interface KvGridOpts {
+export interface KvGridOpts {
   /** Minimum key column width. Default 16. */
   keyWidth?: number;
   /** Indent from left. Default 2 spaces. */
   indent?: string;
   /** Right-align values numerically. Default false. */
   rightAlignValues?: boolean;
+  /**
+   * Optional section title printed above the grid with a thin underline.
+   * Groups related stat blocks visually (e.g. "Project" or "Account Quota").
+   */
+  title?: string;
 }
 
 export function kvGrid(rows: KvRow[], opts: KvGridOpts = {}): void {
+  const ind = opts.indent ?? "  ";
+  if (opts.title) {
+    console.log(`${ind}${t.bold(t.dim(opts.title))}`);
+    console.log(`${ind}${t.subtle(BOX.h.repeat(opts.title.length))}`);
+    console.log();
+  }
+
   const { keyWidth = 16, indent = "  ", rightAlignValues = false } = opts;
 
   // Compute actual key column width from rows

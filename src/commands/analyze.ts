@@ -123,11 +123,11 @@ function renderResults(
   const rows = [
     { key: "Directories", value: String(stats.directory_count), numeric: true, icon: EMOJI.folder },
     { key: "Files", value: String(stats.file_count), numeric: true, icon: EMOJI.file },
-    { key: "Lines", value: stats.total_lines_analyzed.toLocaleString(), numeric: true },
+    { key: "Lines", value: stats.total_lines_analyzed.toLocaleString(), numeric: true, icon: EMOJI.lines },
     { key: "Classes", value: String(stats.class_count), numeric: true, icon: EMOJI.pkg },
     { key: "Functions", value: String(stats.function_count), numeric: true, icon: EMOJI.spark },
     { key: "Methods", value: String(stats.method_count), numeric: true, icon: EMOJI.wrench },
-    { key: "Chunks", value: String(chunkCount), numeric: true },
+    { key: "Chunks", value: String(chunkCount), numeric: true, icon: EMOJI.chunks },
   ];
 
   sectionHeader("Analysis Complete", "✓");

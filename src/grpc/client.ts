@@ -9,6 +9,7 @@
  * is callback/stream-based, wrapped in Promises for an async interface.
  */
 
+import path from "node:path";
 import { resolveApiKey, getBackendConfig } from "../config/manager.js";
 import { ToolExecutor, type ToolResult } from "./tool-executor.js";
 
@@ -296,7 +297,11 @@ export class SynapseClient {
           docs: false,
           generate_only: false,
           todo_list_content: "",
-          context_bundle: JSON.stringify({ mode: "discover", endpoints: [] }),
+          context_bundle: JSON.stringify({
+            mode: "discover",
+            endpoints: [],
+            project_name: path.basename(this.workingDir),
+          }),
         },
       });
 

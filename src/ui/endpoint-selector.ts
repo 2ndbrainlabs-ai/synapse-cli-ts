@@ -1,17 +1,57 @@
 /**
- * Endpoint + use-case pickers.
+ * Endpoint + use-case pickers — Claude CLI inspired design.
  *
- * Multi-line rows with star badges — inspired by the Python CLI's Rich preview
- * panels, adapted to work inside `@inquirer/prompts` checkbox limits.
+ * Each choice is a single truncated line that never wraps, using a shared
+ * @inquirer/checkbox theme: ◆ prefix, ❯ cursor, ◉/○ icons, styled nav bar.
  *
- * @inquirer/prompts renders each choice as a single line, so we pack the three
- * pieces (name/stars, description, file:line) into one wide line with visible
- * separators. When the terminal is wide enough this reads cleanly.
+ * Layout per item:
+ *   Title  ·  N tools  ·  Description truncated to fit…   filename
  */
 
 import { t } from "./theme.js";
 import { sectionHeader } from "./theme.js";
 import { STAR } from "./icons.js";
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+/** Truncate a plain string to maxWidth columns, appending "…" if cut. */
+function truncate(str: string, maxWidth: number): string {
+  if (str.length <= maxWidth) return str;
+  return str.slice(0, Math.max(0, maxWidth - 1)) + "…";
+}
+
+/**
+ * Shared @inquirer/checkbox theme — Claude CLI inspired.
+ *
+ * Icons are plain characters (no ANSI). Inquirer v7 measures icon width using
+ * raw .length, not display-width — ANSI-colored icon strings inflate the
+ * measured width and corrupt checkbox alignment, breaking space-key selection.
+ * Plain chars keep the measurement correct while remaining visually distinct.
+ */
+const CHECKBOX_THEME = {
+  icon: {
+    checked:   "◉",   // plain — visually distinct from ○, width = 1
+    unchecked: "○",   // plain
+    cursor:    "❯",   // plain
+  },
+  style: {
+    message: (text: string) => t.brandBold(text),
+    // Render the collapsed answer as a clean comma-separated title list.
+    // Without this, inquirer concatenates the full ANSI `name` strings,
+    // producing garbled output with all the · separators and file paths.
+    renderSelectedChoices: <T>(
+      selectedChoices: ReadonlyArray<{ short?: string; name?: string; value: T }>,
+    ) =>
+      t.dim(
+        selectedChoices
+          .map((c) => String(c.short ?? c.name ?? ""))
+          .join(", "),
+      ),
+  },
+  helpMode: "always" as const,
+};
 
 // ---------------------------------------------------------------------------
 // Endpoint picker
@@ -34,7 +74,7 @@ export interface EndpointCandidate {
 /**
  * Star badge based on confidence:
  *   ≥ 0.75 → ★★★ gold
- *   ≥ 0.5  → ★★  orange
+ *   ≥ 0.5  → ★★  brand
  *   else   → ★   tan
  */
 function starBadge(confidence: number): string {
@@ -66,37 +106,65 @@ export async function selectEndpoints(
   wrappers.sort((a, b) => b.c.confidence - a.c.confidence);
 
   function makeChoice(c: EndpointCandidate, idx: number, needsWrapper = false) {
-    const title = c.humanTitle || c.name;
-    const wrapperTag = needsWrapper ? `  ${t.warn("(needs wrapper)")}` : "";
-    const line =
-      `${t.brandBold(c.name + "()")}` +
-      `  ${starBadge(c.confidence)}` +
-      `  ${t.dim("—")} ${t.text(title)}` +
-      `  ${t.path(`${c.filePath}:${c.lineNumber}`)}` +
-      wrapperTag;
-    return { name: line, value: String(idx), checked: false };
+    const badge    = starBadge(c.confidence);
+    const badgeRaw = c.confidence >= 0.75 ? "★★★" : c.confidence >= 0.5 ? "★★" : "★";
+    const title    = c.humanTitle || c.name;
+    const wrapTag  = needsWrapper ? `  ${t.warn("(needs wrapper)")}` : "";
+    const modStr   = `${c.filePath}:${c.lineNumber}`;
+
+    // Truncate title to prevent wrapping
+    const cols      = (process.stdout.columns || 100) - 8;
+    const fixedLen  = (c.name + "()").length + 5 + badgeRaw.length + 5 + modStr.length + 3;
+    const titleAvail = Math.max(10, cols - fixedLen);
+
+    const name =
+      t.brandBold(c.name + "()") +
+      t.subtle("  ·  ") +
+      badge +
+      t.subtle("  ·  ") +
+      t.dim(truncate(title, titleAvail)) +
+      `   ${t.path(modStr)}` +
+      wrapTag;
+
+    return { name, value: String(idx), checked: false, short: c.humanTitle || c.name };
   }
 
+  // Build endpoint choices (no custom item here — added inside try with Separator)
   const choices: Array<{ name: string; value: string; checked: boolean }> = [];
-  choices.push({
-    name: `${t.suggest("Custom requirement")}  ${t.dim("— describe what you need")}`,
-    value: CUSTOM_VALUE,
-    checked: false,
-  });
   for (const { c, idx } of ready) choices.push(makeChoice(c, idx));
   for (const { c, idx } of wrappers) choices.push(makeChoice(c, idx, true));
 
   sectionHeader("Select Endpoints");
-  console.log(`  ${t.dim(`${candidates.length} candidates • sorted by confidence`)}`);
+  console.log(`  ${t.dim(`${candidates.length} endpoints discovered`)}`);
   console.log();
 
   try {
-    const { checkbox } = await import("@inquirer/prompts");
+    const { checkbox, Separator } = await import("@inquirer/prompts");
+
+    const customItem = {
+      name:
+        `${t.accentBold("✦")}  ${t.accentBold("Write a custom query")}` +
+        `${t.accent("  ·  ")}${t.accent("describe your own requirements")}`,
+      value: CUSTOM_VALUE,
+      checked: false,
+      short: "Custom query",
+    };
+
+    const sepLine = t.subtle("  " + "─".repeat(Math.min(72, (process.stdout.columns || 80) - 4)));
+
+    const allChoices = [
+      customItem,
+      new Separator(sepLine),
+      ...choices,
+    ];
+
     const selected = await checkbox<string>({
-      message: t.brand("Choose endpoints to expose as MCP tools"),
-      choices,
-      loop: false,
-      pageSize: 15,
+      message:  "Choose endpoints to expose as MCP tools",
+      choices:  allChoices,
+      loop:     false,
+      pageSize: 12,
+      required: true,
+      theme:    CHECKBOX_THEME,
     });
     const customSelected = selected.includes(CUSTOM_VALUE);
     const selectedEndpoints = selected
@@ -139,25 +207,29 @@ export async function selectUseCases(
   }
 
   const CUSTOM_VALUE = "__CUSTOM__";
+  // Build use-case choices only (custom item added inside try with Separator)
   const choices: Array<{ name: string; value: string; checked: boolean }> = [];
 
-  choices.push({
-    name: `${t.suggest("Custom requirement")}  ${t.dim("— describe what you need")}`,
-    value: CUSTOM_VALUE,
-    checked: false,
-  });
-
   for (let i = 0; i < useCases.length; i++) {
-    const uc = useCases[i];
+    const uc       = useCases[i];
     const toolCount = uc.functions.length;
-    const countBadge = t.num(`${toolCount} ${toolCount === 1 ? "tool" : "tools"}`);
-    const moduleTag = uc.module ? `  ${t.path(uc.module)}` : "";
-    const line =
-      `${t.brandBold(uc.title)}` +
-      `  ${countBadge}` +
-      `  ${t.dim("—")} ${t.text(uc.description)}` +
-      moduleTag;
-    choices.push({ name: line, value: String(i), checked: false });
+    const badge    = `${toolCount} ${toolCount === 1 ? "tool" : "tools"}`;
+    const modStr   = uc.module ?? "";
+
+    // Truncate description to prevent terminal wrapping
+    const cols      = (process.stdout.columns || 100) - 8;
+    const fixedLen  = uc.title.length + 5 + badge.length + 5 + (modStr ? modStr.length + 3 : 0);
+    const descAvail = Math.max(10, cols - fixedLen);
+
+    const name =
+      t.brandBold(uc.title) +
+      t.subtle("  ·  ") +
+      t.num(badge) +
+      t.subtle("  ·  ") +
+      t.dim(truncate(uc.description, descAvail)) +
+      (modStr ? `   ${t.path(modStr)}` : "");
+
+    choices.push({ name, value: String(i), checked: false, short: uc.title });
   }
 
   sectionHeader("Select Use Cases");
@@ -165,12 +237,34 @@ export async function selectUseCases(
   console.log();
 
   try {
-    const { checkbox } = await import("@inquirer/prompts");
+    const { checkbox, Separator } = await import("@inquirer/prompts");
+
+    // Custom item — full accent gold so it visually stands apart from terracotta items
+    const customItem = {
+      name:
+        `${t.accentBold("✦")}  ${t.accentBold("Write a custom query")}` +
+        `${t.accent("  ·  ")}${t.accent("describe your own requirements")}`,
+      value: CUSTOM_VALUE,
+      checked: false,
+      short: "Custom query",
+    };
+
+    // Separator between the custom option and the discovered use-case list
+    const sepLine = t.subtle("  " + "─".repeat(Math.min(72, (process.stdout.columns || 80) - 4)));
+
+    const allChoices = [
+      customItem,
+      new Separator(sepLine),
+      ...choices,  // the discovered use-case choices built above
+    ];
+
     const selected = await checkbox<string>({
-      message: t.brand("Choose use cases to build as MCP tools"),
-      choices,
-      loop: false,
-      pageSize: 15,
+      message:  "Choose use cases to build as MCP tools",
+      choices:  allChoices,
+      loop:     false,
+      pageSize: 12,
+      required: true,   // prevents silent empty submission → shows inline error instead
+      theme:    CHECKBOX_THEME,
     });
     const customSelected = selected.includes(CUSTOM_VALUE);
     const selectedUseCases = selected

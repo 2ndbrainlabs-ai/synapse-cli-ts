@@ -1,40 +1,44 @@
 /**
- * Rounded box primitives — the Synapse content panel.
+ * Content block primitives — border-free, width-adaptive layout.
  *
- * Draws real rounded borders `╭─╮ │ ╰─╯` sized to fit the content (not the
- * terminal width). Used for success/error blocks, welcome message, PRO TIP.
+ * Replaces the old `╭─╮│╰─╯` rectangular panels with:
+ *   roundedBox → header + rule + indented body (adapts to any terminal width)
+ *   dashedBox  → full-width label rule + content + closing rule
+ *
+ * Both functions keep their original signatures so all callers work unchanged.
  */
 
 import { t, stripAnsi, displayWidth, _registerRoundedBox } from "./theme.js";
 import { BOX } from "./icons.js";
 
 const INDENT = "  ";
-const H_PAD = 2; // padding inside the box on each side
-const MIN_INNER = 32;
-const MAX_INNER = 76;
 
 interface RoundedBoxOpts {
-  /** Wrap long lines to fit inside the box. Default true. */
+  /** Wrap long lines to fit content width. Default true. */
   wrap?: boolean;
 }
 
 /**
- * Draw a rounded content-sized box.
+ * Draw a border-free content block: bold header + rule + indented body.
  *
  * ```
- *   ╭──────────────────────╮
- *   │  🎉  Welcome         │
- *   │                      │
- *   │  Line 1              │
- *   │  Line 2              │
- *   ╰──────────────────────╯
+ *   ✓  MCP Server Generated
+ *   ──────────────────────────────
+ *
+ *      Tools:     2
+ *      Resources: 0
+ *      Output:    mcp_server.py
+ *
  * ```
  *
- * @param title    Title shown at the top (rendered bold in `color`)
- * @param icon     Optional leading icon (emoji or single glyph)
- * @param color    Colorizer for the border + title (e.g. `t.ok`, `t.brand`)
- * @param lines    Body lines. Empty strings render as blank rows for grouping.
- * @param opts     Rendering options
+ * The rule width scales with the header text (never fixed). Body is indented
+ * 5 spaces and wraps at `cols - 5`. Adapts to any terminal width.
+ *
+ * @param title  Title rendered bold in `color`
+ * @param icon   Optional leading glyph / emoji
+ * @param color  Status colorizer (e.g. `t.ok`, `t.err`, `t.brand`)
+ * @param lines  Body lines. Empty strings render as blank separator rows.
+ * @param opts   Rendering options
  */
 export function roundedBox(
   title: string,
@@ -44,96 +48,104 @@ export function roundedBox(
   opts: RoundedBoxOpts = {},
 ): void {
   const { wrap = true } = opts;
-
-  // Compose header text (with icon if provided)
   const headerText = icon ? `${icon}  ${title}` : title;
+  const cols = Math.max(24, (t.env.columns || 80) - 4);
 
-  // Determine target inner width
-  const maxLineWidth = Math.max(
-    displayWidth(headerText),
-    ...lines.map((l) => displayWidth(l)),
-  );
-  const termLimit = Math.max(MIN_INNER, (t.env.columns || 80) - 6);
-  const targetInner = Math.min(
-    MAX_INNER,
-    Math.max(MIN_INNER, Math.min(maxLineWidth, termLimit)),
-  );
+  // Rule: a bit longer than the header but never overflows the terminal
+  const headerW = displayWidth(stripAnsi(headerText));
+  const ruleWidth = Math.min(cols, Math.max(headerW + 4, 28));
 
-  // Wrap or truncate lines to targetInner
-  const bodyLines: string[] = [];
+  // Header in status color (bold), followed by a rule in the same color
+  console.log();
+  console.log(`${INDENT}${color(t.bold(headerText))}`);
+  console.log(`${INDENT}${color(BOX.h.repeat(ruleWidth))}`);
+
+  // Body: blank line + 5-space indented content + trailing blank line
+  if (lines.length > 0) {
+    const wrapWidth = cols - 5;
+    console.log();
+    for (const line of lines) {
+      if (line === "") {
+        console.log();
+        continue;
+      }
+      const bodyLines = wrap ? wrapLine(line, wrapWidth) : [line];
+      for (const l of bodyLines) {
+        // Auto-cream for plain strings; ANSI-colored strings pass through
+        const rendered = stripAnsi(l) === l ? t.warm(l) : l;
+        console.log(`     ${rendered}`);
+      }
+    }
+  }
+  console.log();
+}
+
+/**
+ * Draw a full-width label rule + content block + closing rule.
+ *
+ * ```
+ *   ─── MCP Client Config ──────────────────────────────────────────────
+ *
+ *   {
+ *     "mcpServers": { ... }
+ *   }
+ *
+ *   ─────────────────────────────────────────────────────────────────────
+ *
+ * ```
+ *
+ * The title floats in the opening rule. Content has 2-space indent (copy-paste
+ * friendly for JSON / code). Both rules span the full terminal width.
+ *
+ * @param title  Label shown in the opening rule
+ * @param _color Signature-compat parameter (unused — layout is always subtle/dim)
+ * @param lines  Content lines
+ */
+export function dashedBox(
+  title: string,
+  _color: (s: string) => string,
+  lines: string[],
+): void {
+  const cols = Math.max(24, (t.env.columns || 80) - 4);
+
+  // Opening rule with floating label: "─── Title ─────────────────────────"
+  const label = ` ${title} `;
+  const leftDashes = 3;
+  const rightDashes = Math.max(0, cols - leftDashes - label.length);
+
+  console.log();
+  console.log(
+    `${INDENT}${t.brand(BOX.h.repeat(leftDashes))}${t.brandBold(label)}${t.subtle(BOX.h.repeat(rightDashes))}`,
+  );
+  console.log();
+
+  // Content — no extra indent so code/JSON is easy to copy-paste
   for (const line of lines) {
     if (line === "") {
-      bodyLines.push("");
+      console.log();
       continue;
     }
-    if (wrap) bodyLines.push(...wrapLine(line, targetInner));
-    else bodyLines.push(line);
+    // Pre-colored lines pass through; plain lines get warm cream
+    const rendered = stripAnsi(line) === line ? t.warm(line) : line;
+    console.log(`${INDENT}${rendered}`);
   }
 
-  // Actual inner width (may equal or slightly exceed target if wrap:false)
-  const innerWidth = Math.max(
-    displayWidth(headerText),
-    ...bodyLines.map((l) => displayWidth(l)),
-    targetInner,
-  );
-  const totalInner = innerWidth + H_PAD * 2;
-
-  // Top border
-  console.log(
-    INDENT + color(BOX.tl + BOX.h.repeat(totalInner) + BOX.tr),
-  );
-
-  // Header row
-  console.log(
-    INDENT +
-      color(BOX.v) +
-      " ".repeat(H_PAD) +
-      color(t.bold(headerText)) +
-      " ".repeat(totalInner - H_PAD - displayWidth(headerText)) +
-      color(BOX.v),
-  );
-
-  // Separator blank line after title
-  if (bodyLines.length > 0) {
-    console.log(
-      INDENT +
-        color(BOX.v) +
-        " ".repeat(totalInner) +
-        color(BOX.v),
-    );
-  }
-
-  // Body rows
-  for (const line of bodyLines) {
-    const w = displayWidth(line);
-    const pad = Math.max(0, totalInner - H_PAD - w);
-    console.log(
-      INDENT +
-        color(BOX.v) +
-        " ".repeat(H_PAD) +
-        line +
-        " ".repeat(pad) +
-        color(BOX.v),
-    );
-  }
-
-  // Bottom border
-  console.log(
-    INDENT + color(BOX.bl + BOX.h.repeat(totalInner) + BOX.br),
-  );
+  // Closing rule — 3 brand dashes then subtle fade (mirrors opening accent)
+  console.log();
+  console.log(`${INDENT}${t.brand(BOX.h.repeat(leftDashes))}${t.subtle(BOX.h.repeat(cols - leftDashes))}`);
+  console.log();
 }
 
 /**
  * Wrap a single logical line to fit within maxWidth (in display columns).
- * ANSI-safe: preserves color codes across the wrap boundary imperfectly
- * (colors are re-applied per segment by convention — callers pre-color spans).
+ * ANSI-safe: colors are re-applied per segment by convention.
  */
 function wrapLine(line: string, maxWidth: number): string[] {
   const plain = stripAnsi(line);
   if (plain.length <= maxWidth) return [line];
 
-  // If line has no ANSI codes, plain wrapping works
   if (plain === line) {
+    // No ANSI — plain word-wrap
     const out: string[] = [];
     const words = line.split(/(\s+)/);
     let current = "";
@@ -149,7 +161,7 @@ function wrapLine(line: string, maxWidth: number): string[] {
     return out;
   }
 
-  // Has ANSI — split by whitespace naïvely, may lose some formatting on wrap
+  // Has ANSI — naïve whitespace split (may lose some formatting on wrap)
   const out: string[] = [];
   const tokens = line.split(/\s+/);
   let current = "";
@@ -168,49 +180,3 @@ function wrapLine(line: string, maxWidth: number): string[] {
 
 // Register with theme.ts for the legacy `sectionBox` wrapper
 _registerRoundedBox(roundedBox);
-
-/**
- * Simpler helper: draw a "dashed" box using thin dashes — for in-progress states.
- * Same layout as roundedBox but uses `╌` for horizontal borders.
- */
-export function dashedBox(
-  title: string,
-  color: (s: string) => string,
-  lines: string[],
-): void {
-  const originalH = BOX.h;
-  // Temporarily swap horizontal glyph — safe since BOX is not frozen elsewhere
-  // Actually let's just render inline
-  const headerText = title;
-  const maxLineWidth = Math.max(
-    displayWidth(headerText),
-    ...lines.map((l) => displayWidth(l)),
-  );
-  const targetInner = Math.min(
-    MAX_INNER,
-    Math.max(MIN_INNER, maxLineWidth),
-  );
-  const totalInner = targetInner + H_PAD * 2;
-  const dash = "╌";
-
-  console.log(INDENT + color(BOX.tl + dash.repeat(totalInner) + BOX.tr));
-  console.log(
-    INDENT +
-      color(BOX.v) +
-      " ".repeat(H_PAD) +
-      color(t.bold(headerText)) +
-      " ".repeat(totalInner - H_PAD - displayWidth(headerText)) +
-      color(BOX.v),
-  );
-  if (lines.length > 0) {
-    console.log(INDENT + color(BOX.v) + " ".repeat(totalInner) + color(BOX.v));
-    for (const line of lines) {
-      const pad = Math.max(0, totalInner - H_PAD - displayWidth(line));
-      console.log(
-        INDENT + color(BOX.v) + " ".repeat(H_PAD) + line + " ".repeat(pad) + color(BOX.v),
-      );
-    }
-  }
-  console.log(INDENT + color(BOX.bl + dash.repeat(totalInner) + BOX.br));
-  void originalH;
-}

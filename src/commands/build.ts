@@ -22,7 +22,7 @@ import {
   getContextMdPath,
 } from "../config/paths.js";
 import { t, stepOk, stepWarn, stepInfo, stepBrand, sectionHeader } from "../ui/theme.js";
-import { roundedBox } from "../ui/box.js";
+import { roundedBox, dashedBox } from "../ui/box.js";
 import { Spinner } from "../ui/spinner.js";
 import { CodeGenerationUI } from "../ui/code-gen-ui.js";
 import { selectUseCases, type UseCaseChoice } from "../ui/endpoint-selector.js";
@@ -131,7 +131,17 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
         workingDir,
       });
 
-      const result = await client.discoverUseCases(projectSchema, (info) => {
+      // For discovery, limit schema size to avoid AI context window overflow.
+      // Large codebases (>60k chars / ~15k tokens) cause the backend to return 0
+      // use cases silently. 60k chars covers the full directory tree + the first
+      // ~80 modules — sufficient for the AI to identify meaningful use cases.
+      // The full schema is still used for generation (not truncated there).
+      const DISCOVERY_SCHEMA_LIMIT = 60_000;
+      const discoverySchema = projectSchema.length > DISCOVERY_SCHEMA_LIMIT
+        ? projectSchema.slice(0, DISCOVERY_SCHEMA_LIMIT)
+        : projectSchema;
+
+      const result = await client.discoverUseCases(discoverySchema, (info) => {
         toolCalls = info.toolCalls;
         spinner.updateMeta({
           extra: toolCalls > 0 ? `${toolCalls} ${toolCalls === 1 ? "call" : "calls"}` : "",
@@ -173,7 +183,7 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
       );
       finalQuery = "Create MCP tools for the following use cases:\n\n" + ucDescs.join("\n");
     } else if (!customSelected) {
-      stepWarn("No selection made", "switching to custom mode");
+      stepInfo("Continuing with custom query");
       customSelected = true;
     }
   } else {
@@ -410,8 +420,8 @@ async function runGeneration(
     }
 
     boxLines.push("");
-    boxLines.push(`${t.dim("Next steps:")}`);
-    boxLines.push(`  ${t.num("1.")} Review the generated server code`);
+    boxLines.push(`${t.accentBold("Next steps:")}`);
+    boxLines.push(`  ${t.num("1.")} ${t.text("Review the generated server code")}`);
     boxLines.push(`  ${t.num("2.")} ${t.cmd("pip install mcp")}`);
     boxLines.push(`  ${t.num("3.")} ${t.cmd(`python ${opts.output}`)}`);
 
@@ -436,11 +446,11 @@ async function runGeneration(
     );
 
     console.log();
-    console.log(`  ${t.dim("Add this to your MCP client config:")}`);
-    console.log();
-    for (const line of configSnippet.split("\n")) {
-      console.log(`    ${t.subtle(line)}`);
-    }
+    dashedBox(
+      "MCP Client Config",
+      t.subtle,
+      configSnippet.split("\n").map((l) => t.code(l)),
+    );
     console.log();
 
     // Env var reminder — outside the box, more visible

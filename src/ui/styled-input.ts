@@ -30,11 +30,19 @@ export async function styledInput(opts: StyledInputOpts): Promise<string> {
   try {
     const inquirer = await import("@inquirer/prompts");
     const prompt = mask ? inquirer.password : inquirer.input;
-    const styledMessage = `${t.brand(ARROW)}  ${t.text(message)}`;
 
-    // @inquirer/prompts supports `theme` and `default` — use `default` for placeholder
+    // Print our styled label directly to stdout — BEFORE calling inquirer.
+    // This bypasses inquirer's internal width measurement entirely.
+    // Inquirer measures both `message.length` and `prefix.length` using raw string
+    // length (not display width). ANSI escape codes inflate those lengths by ~20 chars
+    // and corrupt cursor positioning, producing stray `[` chars and `%` artifacts.
+    // By printing the label ourselves, we pass empty strings to inquirer so it
+    // measures nothing and positions the cursor correctly after our label.
+    process.stdout.write(`  ${t.brand(ARROW)}  ${t.text(message)}: `);
+
     const result = await prompt({
-      message: styledMessage,
+      message: "",       // empty — label already printed above
+      theme: { prefix: "" },  // no "?" prefix — we printed ours
       ...(placeholder && !mask ? { default: placeholder } : {}),
       ...(validate ? { validate } : {}),
     } as Parameters<typeof inquirer.input>[0]);
@@ -70,8 +78,10 @@ export async function styledConfirm(
 ): Promise<boolean> {
   try {
     const { confirm } = await import("@inquirer/prompts");
+    // Use plain ARROW character (no ANSI) as prefix — avoids width measurement bug.
     return await confirm({
-      message: `${t.brand(ARROW)}  ${t.text(message)}`,
+      message,
+      theme: { prefix: ARROW },
       default: defaultValue,
     });
   } catch {

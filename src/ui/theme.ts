@@ -6,7 +6,7 @@
  */
 
 import chalk from "chalk";
-import { OK, ERR, WARN, INFO, ARROW, BOX } from "./icons.js";
+import { OK, ERR, WARN, INFO, ARROW, BOX, H_HEAVY } from "./icons.js";
 
 // ---------------------------------------------------------------------------
 // Environment detection (accessibility branches)
@@ -117,8 +117,30 @@ export function sectionHeader(title: string, icon?: string): void {
   const width = stripAnsi(label).length + 2;
   console.log();
   console.log(`  ${t.brandBold(label)}`);
-  console.log(`  ${t.brand(BOX.h.repeat(width))}`);
+  console.log(`  ${t.brand(H_HEAVY.repeat(width))}`);
   console.log();
+}
+
+/**
+ * Full-width subtle divider between major sections.
+ *   ──────────────────────────────────────────────  (no label)
+ *   ──────────────── Label ─────────────────────── (with label)
+ * Renders as empty line in NO_COLOR mode.
+ */
+export function printDivider(label?: string): void {
+  if (t.env.noColor) { console.log(); return; }
+  const cols = Math.max(20, (t.env.columns || 80) - 4);
+  if (!label) {
+    console.log(`  ${t.subtle(BOX.h.repeat(cols))}`);
+    return;
+  }
+  const labelText = ` ${label} `;
+  const total = Math.max(0, cols - labelText.length);
+  const left = Math.floor(total / 2);
+  const right = total - left;
+  console.log(
+    `  ${t.subtle(BOX.h.repeat(left))}${t.dim(labelText)}${t.subtle(BOX.h.repeat(right))}`,
+  );
 }
 
 /**

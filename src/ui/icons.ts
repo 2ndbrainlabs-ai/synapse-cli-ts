@@ -35,6 +35,15 @@ export const BOX = {
   v: "│",
 } as const;
 
+// Section header heavy underline — heavier visual weight than box borders
+export const H_HEAVY = "━";
+
+// Box title/body separator end-caps (├ ... ┤)
+export const BOX_SEP = {
+  left: "├",
+  right: "┤",
+} as const;
+
 // Orbital spinner frames — the Synapse signature (matches Python CLI)
 export const ORBITAL_FRAMES = ["╭╯", "╮╰", "╯╭", "╰╮"] as const;
 
@@ -61,7 +70,9 @@ export const EMOJI = {
   init: "🎉",
   folder: "📁",
   file: "📄",
+  lines: "📝",
   pkg: "📦",
   spark: "⚡",
   wrench: "🔧",
+  chunks: "🧩",
 } as const;
