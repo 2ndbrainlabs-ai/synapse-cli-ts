@@ -105,14 +105,67 @@ function _generateSessionId(): string {
   return `sess_${ts}${rand}`;
 }
 
-/** Standard channel options shared across all calls. */
+/**
+ * Standard channel options shared across all calls.
+ *
+ * Tuned for long-running agentic streams (discover / build).  The backend may
+ * "think" for many minutes between messages — during those idle windows,
+ * cloud load balancers and NATs will kill HTTP/2 streams unless we keep them
+ * warm with pings.
+ *
+ * Key differences vs. defaults:
+ *   - `keepalive_time_ms=20_000`      → ping every 20s (well under typical
+ *                                        60s LB idle timeouts)
+ *   - `keepalive_timeout_ms=15_000`   → wait 15s for ping ack before deeming
+ *                                        the connection dead
+ *   - `keepalive_permit_without_calls=1` → keep pinging during idle periods,
+ *                                        not just active RPCs (default 0 = pings
+ *                                        stop when no request in flight, which
+ *                                        breaks long agent streams)
+ *   - `max_pings_without_data=0`      → unlimited idle pings (default 2 would
+ *                                        cap us early on quiet streams)
+ *   - `min_time_between_pings_ms=10_000` → matches backend server tolerance
+ *                                        (Synapse backend uses 10s min interval)
+ *
+ * No `deadline` is set — these RPCs must run for as long as the backend
+ * agent needs.  Individual failures are recovered by the retry loop below.
+ */
 const CHANNEL_OPTIONS = {
   "grpc.max_send_message_length": MAX_MESSAGE_SIZE,
   "grpc.max_receive_message_length": MAX_MESSAGE_SIZE,
-  "grpc.keepalive_time_ms": 60_000,
-  "grpc.keepalive_timeout_ms": 40_000,
-  "grpc.keepalive_permit_without_calls": 0,
+  "grpc.keepalive_time_ms": 20_000,
+  "grpc.keepalive_timeout_ms": 15_000,
+  "grpc.keepalive_permit_without_calls": 1,
+  "grpc.http2.max_pings_without_data": 0,
+  "grpc.http2.min_time_between_pings_ms": 10_000,
+  "grpc.http2.min_ping_interval_without_data_ms": 10_000,
+  // Retry the initial connection dance forever — cold Cloud Run instances
+  // sometimes take 30-60s to warm up.
+  "grpc.initial_reconnect_backoff_ms": 1_000,
+  "grpc.max_reconnect_backoff_ms": 10_000,
+  "grpc.enable_retries": 1,
 } as const;
+
+/**
+ * Retryable gRPC status codes for stream reconnection.  These represent
+ * transient network / infrastructure failures where re-issuing the RPC is
+ * safe (we haven't yet received the terminal `build_result`).
+ *
+ * See https://grpc.github.io/grpc/core/md_doc_statuscodes.html.
+ */
+const RETRYABLE_GRPC_CODES = new Set<number>([
+  4,  // DEADLINE_EXCEEDED
+  8,  // RESOURCE_EXHAUSTED
+  10, // ABORTED
+  13, // INTERNAL
+  14, // UNAVAILABLE
+  15, // DATA_LOSS
+]);
+
+/** Sleep helper for exponential backoff between reconnect attempts. */
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 // ---------------------------------------------------------------------------
 // SynapseClient
@@ -257,12 +310,54 @@ export class SynapseClient {
 
   async discoverUseCases(
     projectSchema: string,
-    onProgress?: (info: { toolCalls: number; status: string }) => void,
+    onProgress?: (info: { toolCalls: number; status: string; toolName?: string }) => void,
   ): Promise<DiscoverResult> {
     const grpc = await import("@grpc/grpc-js");
     const { loadProto } = await import("./proto-loader.js");
     const { SynapseService } = loadProto();
 
+    const apiKey = resolveApiKey(this.workingDir);
+    if (!apiKey) {
+      return { useCases: [], error: "Missing API key." };
+    }
+
+    // Retry loop over transient gRPC errors — the stream can survive for
+    // as long as the user is willing to wait, reconnecting on flaky network.
+    const MAX_ATTEMPTS = 5;
+    let lastError = "";
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      const result = await this._discoverOnce(
+        grpc,
+        SynapseService,
+        apiKey,
+        projectSchema,
+        onProgress,
+      );
+
+      // Terminal success — either got use cases or a non-retryable app error
+      if (!result.__transient) {
+        return { useCases: result.useCases, error: result.error };
+      }
+
+      lastError = result.error;
+      if (attempt < MAX_ATTEMPTS) {
+        const backoff = Math.min(1000 * 2 ** (attempt - 1), 8000);
+        onProgress?.({ toolCalls: 0, status: `retrying (attempt ${attempt + 1}/${MAX_ATTEMPTS})` });
+        await sleep(backoff);
+      }
+    }
+
+    return { useCases: [], error: `Discovery failed after ${MAX_ATTEMPTS} attempts: ${lastError}` };
+  }
+
+  private async _discoverOnce(
+    grpc: typeof import("@grpc/grpc-js"),
+    SynapseService: any,
+    apiKey: string,
+    projectSchema: string,
+    onProgress?: (info: { toolCalls: number; status: string; toolName?: string }) => void,
+  ): Promise<{ useCases: UseCase[]; error: string; __transient: boolean }> {
     const target = `${this.host}:${this.port}`;
     const credentials = shouldUseSecure(this.host, this.port)
       ? grpc.credentials.createSsl()
@@ -270,18 +365,12 @@ export class SynapseClient {
 
     const client = new SynapseService(target, credentials, CHANNEL_OPTIONS);
 
-    const apiKey = resolveApiKey(this.workingDir);
-    if (!apiKey) {
-      client.close();
-      return { useCases: [], error: "Missing API key." };
-    }
-
     const metadata = new grpc.Metadata();
     metadata.set("x-api-key", apiKey);
 
     let toolCallCount = 0;
 
-    return new Promise<DiscoverResult>((resolve) => {
+    return new Promise<{ useCases: UseCase[]; error: string; __transient: boolean }>((resolve) => {
       const call = client.Build(metadata);
 
       // Send a build request with mode=discover
@@ -314,7 +403,11 @@ export class SynapseClient {
           const req = msg.tool_request;
           toolCallCount++;
           if (onProgress) {
-            onProgress({ toolCalls: toolCallCount, status: "exploring" });
+            onProgress({
+              toolCalls: toolCallCount,
+              status: "exploring",
+              toolName: req.tool_name,
+            });
           }
 
           let parameters: Record<string, unknown> = {};
@@ -348,22 +441,35 @@ export class SynapseClient {
           } catch {
             useCases = [];
           }
+          gotResult = true;
           call.end();
           client.close();
-          resolve({ useCases, error: res.error ?? "" });
+          resolve({ useCases, error: res.error ?? "", __transient: false });
         }
       });
 
+      let gotResult = false;
+
       call.on("end", () => {
         client.close();
-        resolve({ useCases: [], error: "" });
+        if (!gotResult) {
+          // Stream closed cleanly without a build_result — treat as transient
+          resolve({
+            useCases: [],
+            error: "stream ended before result",
+            __transient: true,
+          });
+        }
       });
 
       call.on("error", (err: any) => {
         client.close();
+        const code = err.code as number | undefined;
+        const transient = code !== undefined && RETRYABLE_GRPC_CODES.has(code);
         resolve({
           useCases: [],
           error: `gRPC error: ${err.code}: ${err.details ?? err.message}`,
+          __transient: transient,
         });
       });
     });
@@ -395,16 +501,8 @@ export class SynapseClient {
     // status_updates and telemetry rows.
     const sessionId = opts.sessionId ?? _generateSessionId();
 
-    const target = `${this.host}:${this.port}`;
-    const credentials = shouldUseSecure(this.host, this.port)
-      ? grpc.credentials.createSsl()
-      : grpc.credentials.createInsecure();
-
-    const client = new SynapseService(target, credentials, CHANNEL_OPTIONS);
-
     const apiKey = resolveApiKey(this.workingDir);
     if (!apiKey) {
-      client.close();
       return {
         success: false,
         error:
@@ -414,15 +512,80 @@ export class SynapseClient {
       };
     }
 
+    // Retry loop — reconnect on transient gRPC failures BEFORE generation
+    // begins.  Once the backend has started producing code (past the
+    // `generating` stage), a mid-stream failure is surfaced verbatim so the
+    // user can decide whether to restart — silently retrying would send the
+    // same query twice and waste tokens.
+    const MAX_ATTEMPTS = 5;
+    let lastResult: BuildResult & { sessionId: string; __transient?: boolean } = {
+      success: false,
+      error: "no attempts made",
+      sessionId,
+    };
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      lastResult = await this._buildOnce(grpc, SynapseService, apiKey, sessionId, opts);
+
+      if (!lastResult.__transient) {
+        return lastResult;
+      }
+
+      if (attempt < MAX_ATTEMPTS) {
+        const backoff = Math.min(1000 * 2 ** (attempt - 1), 8000);
+        opts.callbacks?.onStatus?.(
+          "retrying",
+          `Connection dropped — reconnecting (attempt ${attempt + 1}/${MAX_ATTEMPTS})`,
+          0.1,
+        );
+        await sleep(backoff);
+      }
+    }
+
+    return {
+      ...lastResult,
+      error: `Build failed after ${MAX_ATTEMPTS} attempts: ${lastResult.error}`,
+    };
+  }
+
+  private async _buildOnce(
+    grpc: typeof import("@grpc/grpc-js"),
+    SynapseService: any,
+    apiKey: string,
+    sessionId: string,
+    opts: {
+      query: string;
+      projectSchema: string;
+      outputFile?: string;
+      validate?: boolean;
+      docs?: boolean;
+      generateOnly?: boolean;
+      todoListContent?: string;
+      contextBundle?: Record<string, unknown>;
+      callbacks?: BuildCallbacks;
+    },
+  ): Promise<BuildResult & { sessionId: string; __transient?: boolean }> {
+    const target = `${this.host}:${this.port}`;
+    const credentials = shouldUseSecure(this.host, this.port)
+      ? grpc.credentials.createSsl()
+      : grpc.credentials.createInsecure();
+
+    const client = new SynapseService(target, credentials, CHANNEL_OPTIONS);
+
     const metadata = new grpc.Metadata();
     metadata.set("x-api-key", apiKey);
 
-    return new Promise<BuildResult & { sessionId: string }>((resolve) => {
+    return new Promise<BuildResult & { sessionId: string; __transient?: boolean }>((resolve) => {
       let finalResult: BuildResult & { sessionId: string } = {
         success: false,
         error: "No response received",
         sessionId,
       };
+      // Track whether the backend has started actually generating code.
+      // Retry-on-error is only safe BEFORE this point — mid-generation
+      // failures propagate so the user can decide.
+      let generationStarted = false;
+      let gotFinalResult = false;
 
       // Open the bidirectional stream
       const call = client.Build(metadata);
@@ -453,6 +616,10 @@ export class SynapseClient {
 
         if (msg.status_update) {
           const update = msg.status_update;
+          const stage = (update.stage ?? "").toLowerCase();
+          if (stage === "generating") {
+            generationStarted = true;
+          }
           opts.callbacks?.onStatus?.(
             update.stage,
             update.message,
@@ -503,6 +670,7 @@ export class SynapseClient {
             todoList: res.todo_list,
             sessionId,
           };
+          gotFinalResult = true;
           // Server has delivered the final result; close client side
           call.end();
         } else if (msg.error) {
@@ -512,21 +680,300 @@ export class SynapseClient {
             errorCode: msg.error.code,
             sessionId,
           };
+          gotFinalResult = true;
           call.end();
         }
       });
 
       call.on("end", () => {
         client.close();
+        if (!gotFinalResult) {
+          // Stream ended without a build_result — retry unless mid-generation
+          resolve({
+            ...finalResult,
+            error: "stream ended before result",
+            __transient: !generationStarted,
+          });
+          return;
+        }
         resolve(finalResult);
       });
 
       call.on("error", (err: any) => {
         client.close();
+        const code = err.code as number | undefined;
+        const transient =
+          !generationStarted && code !== undefined && RETRYABLE_GRPC_CODES.has(code);
         resolve({
           success: false,
           error: `gRPC error: ${err.code ?? "UNKNOWN"}: ${err.details ?? err.message}`,
           sessionId,
+          __transient: transient,
+        });
+      });
+    });
+  }
+
+  // -----------------------------------------------------------------------
+  // buildCustom (v2 Custom track) — bidi stream, but far simpler than v1:
+  // CLI sends ONE CustomToolRequest, backend replies with ONE
+  // CustomToolResult (plus zero-or-more StatusUpdate frames in between).
+  // No tool round-trips — backend does everything from the manifest.
+  // -----------------------------------------------------------------------
+
+  async buildCustom(opts: {
+    language: string;
+    manifestJson: string;
+    intent: string;
+    selectedQualnames?: string[];
+    suggestedToolName?: string;
+    sessionId?: string;
+    onStatus?: (stage: string, message: string, progress: number) => void;
+  }): Promise<{
+    success: boolean;
+    tool_name: string;
+    file_extension: string;
+    file_source: string;
+    env_vars: string[];
+    report_json: string;
+    error: string;
+    sessionId: string;
+  }> {
+    const grpc = await import("@grpc/grpc-js");
+    const { loadProto } = await import("./proto-loader.js");
+    const { SynapseService } = loadProto();
+
+    const sessionId = opts.sessionId ?? _generateSessionId();
+
+    const apiKey = resolveApiKey(this.workingDir);
+    if (!apiKey) {
+      return {
+        success: false,
+        tool_name: "",
+        file_extension: "",
+        file_source: "",
+        env_vars: [],
+        report_json: "",
+        error: "Missing API key. Run `synapse init` or set SYNAPSE_API_KEY.",
+        sessionId,
+      };
+    }
+
+    const target = `${this.host}:${this.port}`;
+    const credentials = shouldUseSecure(this.host, this.port)
+      ? grpc.credentials.createSsl()
+      : grpc.credentials.createInsecure();
+
+    const client = new SynapseService(target, credentials, CHANNEL_OPTIONS);
+    const metadata = new grpc.Metadata();
+    metadata.set("x-api-key", apiKey);
+
+    return new Promise((resolve) => {
+      const call = client.Build(metadata);
+
+      let done = false;
+      const finish = (result: any) => {
+        if (done) return;
+        done = true;
+        try { call.end(); } catch { /* already closed */ }
+        client.close();
+        resolve({ ...result, sessionId });
+      };
+
+      call.write({
+        custom_tool_request: {
+          request_id: sessionId,
+          language: opts.language,
+          manifest_json: opts.manifestJson,
+          intent: opts.intent,
+          selected_qualnames: opts.selectedQualnames ?? [],
+          suggested_tool_name: opts.suggestedToolName ?? "",
+        },
+      });
+
+      call.on("data", (msg: any) => {
+        if (msg.status_update) {
+          const u = msg.status_update;
+          opts.onStatus?.(u.stage ?? "", u.message ?? "", u.progress ?? 0);
+        } else if (msg.custom_tool_result) {
+          const r = msg.custom_tool_result;
+          finish({
+            success: !!r.success,
+            tool_name: r.tool_name ?? "",
+            file_extension: r.file_extension ?? "",
+            file_source: r.file_source ?? "",
+            env_vars: r.env_vars ?? [],
+            report_json: r.report_json ?? "",
+            error: r.error ?? "",
+          });
+        } else if (msg.error) {
+          finish({
+            success: false,
+            tool_name: "",
+            file_extension: "",
+            file_source: "",
+            env_vars: [],
+            report_json: "",
+            error: msg.error.message ?? "backend error",
+          });
+        }
+      });
+
+      call.on("end", () => {
+        finish({
+          success: false,
+          tool_name: "",
+          file_extension: "",
+          file_source: "",
+          env_vars: [],
+          report_json: "",
+          error: "stream ended before result",
+        });
+      });
+
+      call.on("error", (err: any) => {
+        finish({
+          success: false,
+          tool_name: "",
+          file_extension: "",
+          file_source: "",
+          env_vars: [],
+          report_json: "",
+          error: `gRPC error: ${err.code ?? "UNKNOWN"}: ${err.details ?? err.message}`,
+        });
+      });
+    });
+  }
+
+  // -----------------------------------------------------------------------
+  // classifyCandidates (v2 Custom-mode discovery) — one gRPC round-trip,
+  // backend fans out N Haiku shards via asyncio.gather. Result is a JSON
+  // list of {qualname, band, tool_shape, workflow_hints, one_line_purpose}.
+  // -----------------------------------------------------------------------
+
+  async classifyCandidates(opts: {
+    manifestJson: string;
+    shardSize?: number;
+    maxShards?: number;
+    sessionId?: string;
+    signal?: AbortSignal;
+    onStatus?: (stage: string, message: string, progress: number) => void;
+    /** Client-side soft timeout in ms. Defaults to 60_000. Protects against
+     *  a mismatched-version backend (no classify_request handler) hanging the
+     *  CLI, or a Cloud Run cold start swallowing the request. */
+    timeoutMs?: number;
+  }): Promise<{
+    success: boolean;
+    verdicts: Array<Record<string, unknown>>;
+    shards_run: number;
+    cached_hits: number;
+    budget_dropped: number;
+    error: string;
+    sessionId: string;
+  }> {
+    const grpc = await import("@grpc/grpc-js");
+    const { loadProto } = await import("./proto-loader.js");
+    const { SynapseService } = loadProto();
+
+    const sessionId = opts.sessionId ?? _generateSessionId();
+
+    const apiKey = resolveApiKey(this.workingDir);
+    if (!apiKey) {
+      return {
+        success: false, verdicts: [], shards_run: 0, cached_hits: 0,
+        budget_dropped: 0, error: "Missing API key.", sessionId,
+      };
+    }
+
+    const target = `${this.host}:${this.port}`;
+    const credentials = shouldUseSecure(this.host, this.port)
+      ? grpc.credentials.createSsl()
+      : grpc.credentials.createInsecure();
+
+    const client = new SynapseService(target, credentials, CHANNEL_OPTIONS);
+    const metadata = new grpc.Metadata();
+    metadata.set("x-api-key", apiKey);
+
+    const timeoutMs = opts.timeoutMs ?? 60_000;
+
+    return new Promise((resolve) => {
+      const call = client.Build(metadata);
+      let done = false;
+      let timeoutHandle: NodeJS.Timeout | null = null;
+
+      const finish = (payload: any) => {
+        if (done) return;
+        done = true;
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        try { call.end(); } catch { /* already closed */ }
+        client.close();
+        resolve({ ...payload, sessionId });
+      };
+
+      // Soft timeout — if the backend doesn't respond (or doesn't recognise
+      // classify_request), fall back gracefully instead of hanging forever.
+      timeoutHandle = setTimeout(() => {
+        finish({
+          success: false, verdicts: [], shards_run: 0, cached_hits: 0,
+          budget_dropped: 0, error: `timeout after ${timeoutMs}ms`,
+        });
+      }, timeoutMs);
+      timeoutHandle.unref?.();
+
+      const abortHandler = () => {
+        finish({
+          success: false, verdicts: [], shards_run: 0, cached_hits: 0,
+          budget_dropped: 0, error: "aborted",
+        });
+      };
+      opts.signal?.addEventListener("abort", abortHandler, { once: true });
+
+      call.write({
+        classify_request: {
+          request_id: sessionId,
+          manifest_json: opts.manifestJson,
+          shard_size: opts.shardSize ?? 12,
+          max_shards: opts.maxShards ?? 20,
+        },
+      });
+
+      call.on("data", (msg: any) => {
+        if (msg.status_update) {
+          const u = msg.status_update;
+          opts.onStatus?.(u.stage ?? "", u.message ?? "", u.progress ?? 0);
+        } else if (msg.classify_result) {
+          const r = msg.classify_result;
+          let verdicts: Array<Record<string, unknown>> = [];
+          try {
+            verdicts = JSON.parse(r.verdicts_json || "[]");
+          } catch { /* keep empty */ }
+          finish({
+            success: !!r.success,
+            verdicts,
+            shards_run: r.shards_run ?? 0,
+            cached_hits: r.cached_hits ?? 0,
+            budget_dropped: r.budget_dropped ?? 0,
+            error: r.error ?? "",
+          });
+        } else if (msg.error) {
+          finish({
+            success: false, verdicts: [], shards_run: 0, cached_hits: 0,
+            budget_dropped: 0, error: msg.error.message ?? "backend error",
+          });
+        }
+      });
+
+      call.on("end", () => {
+        finish({
+          success: false, verdicts: [], shards_run: 0, cached_hits: 0,
+          budget_dropped: 0, error: "stream ended before result",
+        });
+      });
+      call.on("error", (err: any) => {
+        finish({
+          success: false, verdicts: [], shards_run: 0, cached_hits: 0,
+          budget_dropped: 0,
+          error: `gRPC error: ${err.code ?? "UNKNOWN"}: ${err.details ?? err.message}`,
         });
       });
     });

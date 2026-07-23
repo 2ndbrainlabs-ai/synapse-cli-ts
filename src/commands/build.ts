@@ -29,6 +29,7 @@ import { selectUseCases, type UseCaseChoice } from "../ui/endpoint-selector.js";
 import { styledInput } from "../ui/styled-input.js";
 import { pickVerb } from "../ui/verbs.js";
 import { BULLET } from "../ui/icons.js";
+import { ToolActivity } from "../ui/tool-activity.js";
 
 export interface BuildOptions {
   query?: string;
@@ -118,7 +119,7 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
 
   if (!finalQuery) {
     const spinner = new Spinner("orbital");
-    let toolCalls = 0;
+    const activity = new ToolActivity();
     spinner.start(`${pickVerb()} your codebase`);
 
     try {
@@ -132,10 +133,9 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
       });
 
       const result = await client.discoverUseCases(projectSchema, (info) => {
-        toolCalls = info.toolCalls;
-        spinner.updateMeta({
-          extra: toolCalls > 0 ? `${toolCalls} ${toolCalls === 1 ? "call" : "calls"}` : "",
-        });
+        // Only tool_request events carry a toolName — status ticks arrive without one.
+        if (info.toolName) activity.record(info.toolName);
+        spinner.updateMeta({ extra: activity.format() });
       });
 
       if (result.error) {
@@ -257,7 +257,7 @@ async function runGeneration(
   const state = {
     spinner: null as Spinner | null,
     genUI: null as CodeGenerationUI | null,
-    toolCalls: 0,
+    activity: new ToolActivity(),
   };
   const genStartTime = Date.now();
 
@@ -311,12 +311,10 @@ async function runGeneration(
     }
   };
 
-  const onToolCall = (_toolName: string, _result: unknown) => {
-    state.toolCalls++;
+  const onToolCall = (toolName: string, _result: unknown) => {
+    state.activity.record(toolName);
     if (state.spinner) {
-      state.spinner.updateMeta({
-        extra: `${state.toolCalls} ${state.toolCalls === 1 ? "call" : "calls"}`,
-      });
+      state.spinner.updateMeta({ extra: state.activity.format() });
     }
   };
 

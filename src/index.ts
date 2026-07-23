@@ -47,12 +47,36 @@ program
 program
   .command("build")
   .description("Build MCP server based on requirements")
-  .option("-q, --query <query>", "MCP server requirements")
-  .option("-o, --output <file>", "Output file for generated server", "mcp_server.py")
+  .option("-q, --query <query>", "MCP server requirements (v1) / workflow intent (v2 custom)")
+  .option("-o, --output <file>", "Output file for generated server (v1 only)", "mcp_server.py")
   .option("--no-validate", "Skip validation step")
   .option("--no-docs", "Skip documentation step")
   .option("-g, --generate", "Skip planner and use existing todo_list.md")
+  // v2 flags
+  .option("--engine <version>", "Build engine: 'v2' (default, two-track) or 'v1' (legacy agent loop)", "v2")
+  .option("--auto", "v2: force Auto track (expose HTTP endpoints via runner)")
+  .option("--custom", "v2: force Custom track (compose internal functions)")
+  .option("--base-url <url>", "v2 auto: deployed base URL for the API")
+  .option("--server-name <name>", "v2 auto: name for the created MCP server")
+  .option("--resume", "v2: resume the most recent unfinished discover session for this repo")
+  .option("--max-time <minutes>", "v2: soft wall-clock cap in minutes (default 15)")
+  .option("--deep", "v2 custom: raise candidate cap from 200 to 500 during classification")
   .action(async (opts) => {
+    if (opts.engine === "v2") {
+      const { runBuildV2 } = await import("./commands/v2/build-v2.js");
+      const maxTimeMinutes = opts.maxTime ? Number(opts.maxTime) : undefined;
+      await runBuildV2({
+        auto: opts.auto ?? false,
+        custom: opts.custom ?? false,
+        query: opts.query,
+        baseUrl: opts.baseUrl,
+        serverName: opts.serverName,
+        resume: opts.resume ?? false,
+        maxTimeMinutes: Number.isFinite(maxTimeMinutes) ? (maxTimeMinutes as number) : undefined,
+        deep: opts.deep ?? false,
+      });
+      return;
+    }
     const { runBuild } = await import("./commands/build.js");
     await runBuild({
       query: opts.query,
