@@ -1,67 +1,141 @@
 /**
- * Rounded box primitives — the Synapse content panel.
+ * Rounded content boxes — the Ember content panel.
  *
- * Draws real rounded borders `╭─╮ │ ╰─╯` sized to fit the content (not the
- * terminal width). Used for success/error blocks, welcome message, PRO TIP.
+ * Ember principle: the box border itself carries NO semantic color. Only
+ * the inline status glyph inside the header row is colored. That way the
+ * eye lands on the accent word/glyph, not the whole frame.
+ *
+ * Two public entry points:
+ *
+ *  1. `roundedBox(title, icon, color, lines)` — legacy 4-arg form. The
+ *     `color` argument is now used only for the header GLYPH; the border
+ *     is always `t.faint`.
+ *
+ *  2. `roundedBox({ body, innerWidth, borderColor?, variant?, title?, ... })`
+ *     — new options form. Preferred in new code. `variant: "dashed"`
+ *     replaces the retired `dashedBox()` helper (kept as a passthrough).
  */
 
-import { t, stripAnsi, displayWidth, _registerRoundedBox } from "./theme.js";
-import { BOX } from "./icons.js";
+import { t, stripAnsi, displayWidth } from "./theme.js";
+import { BOX, BOX_DASHED } from "./icons.js";
+import { boxInnerWidth } from "./layout.js";
 
 const INDENT = "  ";
-const H_PAD = 2; // padding inside the box on each side
-const MIN_INNER = 32;
-const MAX_INNER = 76;
+const H_PAD = 2;
+const MIN_INNER = 28;
 
-interface RoundedBoxOpts {
-  /** Wrap long lines to fit inside the box. Default true. */
+// Semantic color to inline-glyph mapping. Everything else uses text-faint.
+type Colorizer = (s: string) => string;
+
+interface RoundedBoxOptions {
+  /** Body lines. Empty strings render blank rows. Required (options form). */
+  body?: string[];
+  /** Title shown in the header row. */
+  title?: string;
+  /** Optional glyph placed before the title. Colored via `glyphColor`. */
+  glyph?: string;
+  /** Color applied to the title's leading glyph. Default: none (title-primary). */
+  glyphColor?: Colorizer;
+  /** Force a specific inner width. Default: from `boxInnerWidth()`. */
+  innerWidth?: number;
+  /** Border color. Default: `t.faint`. Do not pass a semantic color here. */
+  borderColor?: Colorizer;
+  /** "solid" (default) or "dashed" (in-progress / tip box). */
+  variant?: "solid" | "dashed";
+  /** Word-wrap body lines longer than innerWidth. Default true. */
   wrap?: boolean;
 }
 
-/**
- * Draw a rounded content-sized box.
- *
- * ```
- *   ╭──────────────────────╮
- *   │  🎉  Welcome         │
- *   │                      │
- *   │  Line 1              │
- *   │  Line 2              │
- *   ╰──────────────────────╯
- * ```
- *
- * @param title    Title shown at the top (rendered bold in `color`)
- * @param icon     Optional leading icon (emoji or single glyph)
- * @param color    Colorizer for the border + title (e.g. `t.ok`, `t.brand`)
- * @param lines    Body lines. Empty strings render as blank rows for grouping.
- * @param opts     Rendering options
- */
+interface LegacyOpts {
+  wrap?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Public entry point — accepts either the legacy 4-arg form or the new
+// options-object form. Dispatch on typeof first arg.
+// ---------------------------------------------------------------------------
+
+export function roundedBox(opts: RoundedBoxOptions): void;
 export function roundedBox(
   title: string,
   icon: string | undefined,
-  color: (s: string) => string,
+  color: Colorizer,
   lines: string[],
-  opts: RoundedBoxOpts = {},
+  opts?: LegacyOpts,
+): void;
+export function roundedBox(
+  first: RoundedBoxOptions | string,
+  icon?: string,
+  color?: Colorizer,
+  lines?: string[],
+  legacyOpts?: LegacyOpts,
 ): void {
-  const { wrap = true } = opts;
+  if (typeof first === "string") {
+    return renderBox({
+      title: first,
+      glyph: icon,
+      glyphColor: color,
+      borderColor: t.faint,
+      body: lines ?? [],
+      variant: "solid",
+      wrap: legacyOpts?.wrap ?? true,
+    });
+  }
+  return renderBox({
+    variant: "solid",
+    wrap: true,
+    borderColor: t.faint,
+    ...first,
+  });
+}
 
-  // Compose header text (with icon if provided)
-  const headerText = icon ? `${icon}  ${title}` : title;
+/**
+ * @deprecated Use `roundedBox({ variant: "dashed", ... })`. Kept as a
+ * passthrough so no import breaks; deleted in M6.
+ */
+export function dashedBox(title: string, color: Colorizer, lines: string[]): void {
+  renderBox({
+    title,
+    glyphColor: color,
+    borderColor: t.faint,
+    body: lines,
+    variant: "dashed",
+    wrap: true,
+  });
+}
 
-  // Determine target inner width
-  const maxLineWidth = Math.max(
-    displayWidth(headerText),
-    ...lines.map((l) => displayWidth(l)),
+// ---------------------------------------------------------------------------
+// Renderer
+// ---------------------------------------------------------------------------
+
+function renderBox(opts: RoundedBoxOptions): void {
+  const wrap = opts.wrap ?? true;
+  const border = opts.borderColor ?? t.faint;
+  const glyphColor = opts.glyphColor ?? t.warm;
+  const chars = opts.variant === "dashed" ? BOX_DASHED : BOX;
+
+  // Compose header text — glyph is colored, title is bold primary.
+  const glyphPart = opts.glyph
+    ? `${glyphColor(opts.glyph)}  `
+    : "";
+  const titlePart = opts.title ? t.bold(t.primary(opts.title)) : "";
+  const headerText = opts.title ? `${glyphPart}${titlePart}` : "";
+
+  // Body pre-processing
+  const rawBody = opts.body ?? [];
+  const maxRawWidth = Math.max(
+    displayWidth(stripAnsi(headerText)),
+    ...rawBody.map((l) => displayWidth(l)),
   );
-  const termLimit = Math.max(MIN_INNER, (t.env.columns || 80) - 6);
-  const targetInner = Math.min(
-    MAX_INNER,
-    Math.max(MIN_INNER, Math.min(maxLineWidth, termLimit)),
+
+  const boxMax = opts.innerWidth ?? boxInnerWidth();
+  const targetInner = Math.max(
+    MIN_INNER,
+    Math.min(boxMax, maxRawWidth || boxMax),
   );
 
-  // Wrap or truncate lines to targetInner
   const bodyLines: string[] = [];
-  for (const line of lines) {
+  for (const line of rawBody) {
     if (line === "") {
       bodyLines.push("");
       continue;
@@ -70,69 +144,65 @@ export function roundedBox(
     else bodyLines.push(line);
   }
 
-  // Actual inner width (may equal or slightly exceed target if wrap:false)
   const innerWidth = Math.max(
-    displayWidth(headerText),
+    displayWidth(stripAnsi(headerText)),
     ...bodyLines.map((l) => displayWidth(l)),
     targetInner,
   );
   const totalInner = innerWidth + H_PAD * 2;
 
-  // Top border
-  console.log(
-    INDENT + color(BOX.tl + BOX.h.repeat(totalInner) + BOX.tr),
-  );
+  // ── Top border ──────────────────────────────────────────────────────
+  console.log(INDENT + border(chars.tl + chars.h.repeat(totalInner) + chars.tr));
 
-  // Header row
-  console.log(
-    INDENT +
-      color(BOX.v) +
-      " ".repeat(H_PAD) +
-      color(t.bold(headerText)) +
-      " ".repeat(totalInner - H_PAD - displayWidth(headerText)) +
-      color(BOX.v),
-  );
-
-  // Separator blank line after title
-  if (bodyLines.length > 0) {
+  // ── Header row (if title provided) ──────────────────────────────────
+  if (headerText) {
+    const headerWidth = displayWidth(stripAnsi(headerText));
     console.log(
       INDENT +
-        color(BOX.v) +
-        " ".repeat(totalInner) +
-        color(BOX.v),
+        border(chars.v) +
+        " ".repeat(H_PAD) +
+        headerText +
+        " ".repeat(Math.max(0, totalInner - H_PAD - headerWidth)) +
+        border(chars.v),
     );
+    // Blank separator row after the title (only if there's body content).
+    if (bodyLines.length > 0) {
+      console.log(
+        INDENT +
+          border(chars.v) +
+          " ".repeat(totalInner) +
+          border(chars.v),
+      );
+    }
   }
 
-  // Body rows
+  // ── Body rows ───────────────────────────────────────────────────────
   for (const line of bodyLines) {
     const w = displayWidth(line);
     const pad = Math.max(0, totalInner - H_PAD - w);
     console.log(
       INDENT +
-        color(BOX.v) +
+        border(chars.v) +
         " ".repeat(H_PAD) +
         line +
         " ".repeat(pad) +
-        color(BOX.v),
+        border(chars.v),
     );
   }
 
-  // Bottom border
-  console.log(
-    INDENT + color(BOX.bl + BOX.h.repeat(totalInner) + BOX.br),
-  );
+  // ── Bottom border ───────────────────────────────────────────────────
+  console.log(INDENT + border(chars.bl + chars.h.repeat(totalInner) + chars.br));
 }
 
-/**
- * Wrap a single logical line to fit within maxWidth (in display columns).
- * ANSI-safe: preserves color codes across the wrap boundary imperfectly
- * (colors are re-applied per segment by convention — callers pre-color spans).
- */
+// ---------------------------------------------------------------------------
+// Word-wrap helper (ANSI-aware, imperfect but safe for our usage)
+// ---------------------------------------------------------------------------
+
 function wrapLine(line: string, maxWidth: number): string[] {
   const plain = stripAnsi(line);
   if (plain.length <= maxWidth) return [line];
 
-  // If line has no ANSI codes, plain wrapping works
+  // Line has no ANSI codes — plain wrapping works.
   if (plain === line) {
     const out: string[] = [];
     const words = line.split(/(\s+)/);
@@ -149,7 +219,7 @@ function wrapLine(line: string, maxWidth: number): string[] {
     return out;
   }
 
-  // Has ANSI — split by whitespace naïvely, may lose some formatting on wrap
+  // Has ANSI — split on whitespace. Colors reapplied per-token by convention.
   const out: string[] = [];
   const tokens = line.split(/\s+/);
   let current = "";
@@ -166,51 +236,32 @@ function wrapLine(line: string, maxWidth: number): string[] {
   return out;
 }
 
-// Register with theme.ts for the legacy `sectionBox` wrapper
-_registerRoundedBox(roundedBox);
+// ---------------------------------------------------------------------------
+// Back-compat: `sectionBox` — variant-colored glyph in a rounded box.
+// Old call sites imported from theme.ts; that import still works via the
+// `export { sectionBox } from "./box.js"` shim in theme.ts. New code should
+// call `roundedBox({ glyph, glyphColor: t.err, ... })` directly.
+// ---------------------------------------------------------------------------
 
 /**
- * Simpler helper: draw a "dashed" box using thin dashes — for in-progress states.
- * Same layout as roundedBox but uses `╌` for horizontal borders.
+ * @deprecated Use `roundedBox({ glyph, glyphColor: t.err, ... })` directly.
  */
-export function dashedBox(
+export function sectionBox(
   title: string,
-  color: (s: string) => string,
+  variant: "ok" | "err" | "warn" | "info",
   lines: string[],
 ): void {
-  const originalH = BOX.h;
-  // Temporarily swap horizontal glyph — safe since BOX is not frozen elsewhere
-  // Actually let's just render inline
-  const headerText = title;
-  const maxLineWidth = Math.max(
-    displayWidth(headerText),
-    ...lines.map((l) => displayWidth(l)),
-  );
-  const targetInner = Math.min(
-    MAX_INNER,
-    Math.max(MIN_INNER, maxLineWidth),
-  );
-  const totalInner = targetInner + H_PAD * 2;
-  const dash = "╌";
-
-  console.log(INDENT + color(BOX.tl + dash.repeat(totalInner) + BOX.tr));
-  console.log(
-    INDENT +
-      color(BOX.v) +
-      " ".repeat(H_PAD) +
-      color(t.bold(headerText)) +
-      " ".repeat(totalInner - H_PAD - displayWidth(headerText)) +
-      color(BOX.v),
-  );
-  if (lines.length > 0) {
-    console.log(INDENT + color(BOX.v) + " ".repeat(totalInner) + color(BOX.v));
-    for (const line of lines) {
-      const pad = Math.max(0, totalInner - H_PAD - displayWidth(line));
-      console.log(
-        INDENT + color(BOX.v) + " ".repeat(H_PAD) + line + " ".repeat(pad) + color(BOX.v),
-      );
-    }
-  }
-  console.log(INDENT + color(BOX.bl + dash.repeat(totalInner) + BOX.br));
-  void originalH;
+  const color =
+    variant === "ok" ? t.ok
+    : variant === "err" ? t.err
+    : variant === "warn" ? t.warn
+    : t.info;
+  renderBox({
+    title,
+    glyphColor: color,
+    borderColor: t.faint,
+    body: lines,
+    variant: "solid",
+    wrap: true,
+  });
 }

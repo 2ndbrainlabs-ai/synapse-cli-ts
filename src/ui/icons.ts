@@ -1,31 +1,32 @@
 /**
  * Icon vocabulary — single source of truth.
  *
- * Every glyph the CLI uses lives here so we never drift between ✖ vs ✗ or
- * reuse the same character for different meanings.
+ * Every glyph the CLI uses lives here. Ember pattern: no chrome emoji,
+ * one sanctioned `SPARK` for the "Ready" completion line, ASCII-safe
+ * fallbacks reserved for the `!isUnicodeSupported()` path (added in M6).
  */
 
-// Status
+// ── Status glyphs (Ember canonical set) ───────────────────────────────────
 export const OK = "✓";
-export const ERR = "✖";
-export const WARN = "⚠";
-export const INFO = "ⓘ";
+export const ERR = "✗";       // changed from ✖ — cleaner form, matches @clack, Bun
+export const WARN = "!";      // exclamation mark — punchier than ⚠, no width flex
+export const INFO = "i";      // lowercase i — sits below the type baseline nicely
 
-// Directional / structural
-export const ARROW = "›";
-export const ARROW_R = "→";
+// ── Directional / structural ──────────────────────────────────────────────
+export const ARROW = "›";       // Prompt marker, breadcrumbs
+export const ARROW_R = "→";     // Next-step CTA
 export const BULLET = "•";
 export const DOT = "·";
 export const DOT_FILLED = "●";
 export const CIRCLE = "○";
-export const STAR = "★";
-export const SPARK = "⚡";
+export const DIAMOND = "◆";     // Active prompt anchor
+export const SPARK = "✦";       // The one and only "Ready" completion glyph
 
-// File-type single letters (used in Available Code listings)
+// ── File-type single letters (Available Code listings) ────────────────────
 export const FN = "f";
 export const CLS = "C";
 
-// Rounded box glyphs
+// ── Rounded box glyphs ────────────────────────────────────────────────────
 export const BOX = {
   tl: "╭",
   tr: "╮",
@@ -35,33 +36,47 @@ export const BOX = {
   v: "│",
 } as const;
 
-// Orbital spinner frames — the Synapse signature (matches Python CLI)
-export const ORBITAL_FRAMES = ["╭╯", "╮╰", "╯╭", "╰╮"] as const;
+// ── Dashed variant (used for in-progress / tip boxes) ─────────────────────
+export const BOX_DASHED = {
+  ...BOX,
+  h: "╌",
+} as const;
 
-// Braille spinner — used for tool-call-heavy phases
+// ── Spinner frames — single Ember mode: Braille dots @ 80ms ───────────────
 export const BRAILLE_FRAMES = [
-  "⠋",
-  "⠙",
-  "⠹",
-  "⠸",
-  "⠼",
-  "⠴",
-  "⠦",
-  "⠧",
-  "⠇",
-  "⠏",
+  "⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏",
 ] as const;
 
-// Command headers use emoji — keep the set minimal & consistent
+// ── Confidence bars (rendered by pickers, never as numbers) ───────────────
+export const CONF_BAR = {
+  high: "━━━",
+  med:  "━━─",
+  low:  "━──",
+} as const;
+
+// ── Progress bar cells (Bun / Turborepo idiom) ────────────────────────────
+export const PROGRESS_FULL = "━";
+export const PROGRESS_EMPTY = "─";
+
+// ── Deprecated (kept as shims so no import breaks during migration) ───────
+/** @deprecated Ember uses `SPARK` (✦) instead. */
+export const STAR = "✦";
+/** @deprecated The orbital spinner is retired; use Braille. Kept for compat. */
+export const ORBITAL_FRAMES = ["╭╯", "╮╰", "╯╭", "╰╮"] as const;
+
+/**
+ * @deprecated Ember has no chrome emoji. This map returns empty strings so
+ * `${EMOJI.build}  Title` still parses but renders as ${title}. Delete in M6.
+ */
 export const EMOJI = {
-  build: "🏗️",
-  analyze: "🔍",
-  info: "📊",
-  config: "⚙️",
-  init: "🎉",
-  folder: "📁",
-  file: "📄",
-  pkg: "📦",
-  spark: "⚡",
-  wrench: "🔧",
+  build: "",
+  analyze: "",
+  info: "",
+  config: "",
+  init: "",
+  folder: "",
+  file: "",
+  pkg: "",
+  spark: SPARK,
+  wrench: "",
 } as const;

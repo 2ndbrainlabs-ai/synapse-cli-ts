@@ -21,14 +21,13 @@ import {
   getProjectSchemaPath,
   getContextMdPath,
 } from "../config/paths.js";
-import { t, stepOk, stepWarn, stepInfo, stepBrand, sectionHeader } from "../ui/theme.js";
+import { t, stepWarn, stepInfo, stepBrand, sectionHeader } from "../ui/theme.js";
 import { roundedBox } from "../ui/box.js";
 import { Spinner } from "../ui/spinner.js";
 import { CodeGenerationUI } from "../ui/code-gen-ui.js";
 import { selectUseCases, type UseCaseChoice } from "../ui/endpoint-selector.js";
 import { styledInput } from "../ui/styled-input.js";
 import { pickVerb } from "../ui/verbs.js";
-import { BULLET } from "../ui/icons.js";
 import { ToolActivity } from "../ui/tool-activity.js";
 
 export interface BuildOptions {
@@ -389,67 +388,24 @@ async function runGeneration(
     );
     const envVars = [...new Set([...envVarMatches].map((m) => m[1]))];
 
-    // Success box
-    const boxLines: string[] = [];
-    boxLines.push(`${t.dim("Tools:")}     ${t.num(String(result.toolCount ?? 0))}`);
-    boxLines.push(`${t.dim("Resources:")} ${t.num(String(result.resourceCount ?? 0))}`);
-    boxLines.push(`${t.dim("Output:")}    ${t.path(opts.output)}`);
-    // Session id — quote this when reporting an issue; matches Langfuse trace.
-    if ((result as any).sessionId) {
-      boxLines.push(`${t.dim("Session:")}   ${t.subtle((result as any).sessionId)}`);
-    }
-
-    if (envVars.length > 0) {
-      boxLines.push("");
-      boxLines.push(`${t.dim("Required environment variables:")}`);
-      for (const v of envVars) {
-        boxLines.push(`  ${t.warn(BULLET)} ${t.cmd(v)}`);
-      }
-    }
-
-    boxLines.push("");
-    boxLines.push(`${t.dim("Next steps:")}`);
-    boxLines.push(`  ${t.num("1.")} Review the generated server code`);
-    boxLines.push(`  ${t.num("2.")} ${t.cmd("pip install mcp")}`);
-    boxLines.push(`  ${t.num("3.")} ${t.cmd(`python ${opts.output}`)}`);
-
-    console.log();
-    roundedBox("MCP Server Generated", "✓", t.ok, boxLines);
-
-    // MCP client config — printed outside the box, copy-paste friendly
+    // Ember shared success surface — matches v2 exactly.
     const absOutput = path.resolve(workingDir, opts.output);
-    const mcpServerConfig: Record<string, unknown> = {
-      command: "python",
-      args: [absOutput],
-    };
-    if (envVars.length > 0) {
-      const envObj: Record<string, string> = {};
-      for (const v of envVars) envObj[v] = "";
-      mcpServerConfig.env = envObj;
-    }
-    const configSnippet = JSON.stringify(
-      { mcpServers: { "custom-server": mcpServerConfig } },
-      null,
-      2,
-    );
-
-    console.log();
-    console.log(`  ${t.dim("Add this to your MCP client config:")}`);
-    console.log();
-    for (const line of configSnippet.split("\n")) {
-      console.log(`    ${t.subtle(line)}`);
-    }
-    console.log();
-
-    // Env var reminder — outside the box, more visible
-    if (envVars.length > 0) {
-      stepWarn(
-        `Set ${envVars.length} environment variable${envVars.length === 1 ? "" : "s"} before running:`,
-        envVars.join(", "),
-      );
-      console.log();
-    }
-    stepOk("Done");
+    const mcpEnv: Record<string, string> = {};
+    for (const v of envVars) mcpEnv[v] = "";
+    const { renderSuccessMcp } = await import("../ui/success.js");
+    renderSuccessMcp({
+      toolName: "custom_server",
+      language: "python",
+      outputPath: opts.output,
+      sessionId: (result as any).sessionId,
+      envVars,
+      mcpConfig: {
+        command: "python",
+        args: [absOutput],
+        ...(envVars.length > 0 ? { env: mcpEnv } : {}),
+      },
+      subtitle: `${result.toolCount ?? 0} tools, ${result.resourceCount ?? 0} resources`,
+    });
   } catch (e) {
     if (state.genUI) {
       state.genUI.stop();

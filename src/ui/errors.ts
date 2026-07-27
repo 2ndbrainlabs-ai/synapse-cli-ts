@@ -101,33 +101,40 @@ export function renderErrorBox(opts: RenderErrorOpts): void {
   const missing = wire?.missing_fields ?? [];
 
   const lines: string[] = [];
-  lines.push(`${t.err("[" + code + "]")}  ${t.text(summary)}`);
+  // Summary first — the human-readable one-liner. Code tucked in muted subtle.
+  lines.push(`${t.warm(summary)}  ${t.subtle("[" + code + "]")}`);
+
   if (missing.length > 0) {
     lines.push("");
-    lines.push(t.dim("Missing fields:"));
-    for (const f of missing.slice(0, 6)) lines.push("  " + t.cmd(f));
-    if (missing.length > 6) lines.push(t.dim(`  … and ${missing.length - 6} more`));
+    lines.push(t.bold("Missing fields:"));
+    for (const f of missing.slice(0, 6)) lines.push(`  ${t.warn("!")}  ${t.warm(f)}`);
+    if (missing.length > 6) lines.push(t.subtle(`  … and ${missing.length - 6} more`));
   }
   if (technical) {
     lines.push("");
-    lines.push(t.dim("Details:"));
+    lines.push(t.bold("Details:"));
     for (const line of technical.split("\n").slice(0, 6)) {
-      lines.push("  " + t.subtle(line));
+      lines.push(`  ${t.subtle(line)}`);
     }
   }
   if (hint) {
     lines.push("");
-    lines.push(`${t.brand("💡 Hint:")} ${hint}`);
+    lines.push(`${t.info("i")}  ${t.warm(hint)}`);
   }
   const ledger = ledgerHint(opts.workingDir, opts.sessionId);
   if (opts.sessionId || ledger) {
     lines.push("");
-    if (opts.sessionId) lines.push(`${t.dim("Session:")} ${t.subtle(opts.sessionId)}`);
-    if (ledger) lines.push(`${t.dim("Logs:")}    ${t.subtle(ledger)}`);
-    lines.push(t.dim("Share these when reporting an issue."));
+    if (opts.sessionId) lines.push(`${t.bold("Session:")} ${t.subtle(opts.sessionId)}`);
+    if (ledger) lines.push(`${t.bold("Logs:")}    ${t.subtle(ledger)}`);
+    lines.push(t.italic(t.subtle("Share these when reporting an issue.")));
   }
 
-  roundedBox(opts.title ?? "Synapse Error", "✖", t.err, lines);
+  roundedBox({
+    glyph: "✗",
+    glyphColor: t.err,
+    title: opts.title ?? "Synapse Error",
+    body: lines,
+  });
 }
 
 /** Convenience: for legacy code paths that still emit plain-string errors,

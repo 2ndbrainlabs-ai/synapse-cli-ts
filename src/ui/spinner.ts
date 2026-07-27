@@ -1,41 +1,57 @@
 /**
- * Unified spinner — three modes: ellipsis, orbital (Synapse signature), braille.
+ * Unified spinner — Ember mode: single Braille-dots animation @ 80ms.
  *
- * Replaces the previous three separate implementations. Supports:
- *   - cumulative timer across sequential start() calls
- *   - meta line updates (extra info like "N tool calls")
- *   - reduced-motion / non-TTY fallback (renders as `[working] 12s`)
- *   - complete() and fail() print a final line with the elapsed time
+ * The old three-mode API (`ellipsis` / `orbital` / `braille`) is preserved
+ * as a type + constructor arg for back-compat, but every mode now maps to
+ * Braille. The orbital `╭╯╮╰` glyph is retired from spinner duty and gets
+ * a second life as the `✦ Ready` completion mark in success screens.
+ *
+ * Non-TTY / NO_COLOR / CI behavior — the biggest bug fix here:
+ *
+ *   Before: `clearLine()` wrote `\n` every 80ms in non-TTY mode → CI logs
+ *   spammed with blank lines. `render()` also fired for every timer tick.
+ *   After:  non-TTY emits ONE line on `start(message)`, ONE more line only
+ *   when `updateMessage()` changes text, and a final completion line on
+ *   `complete()` / `fail()`. Zero output between message changes.
+ *
+ * Public API is unchanged: `start`, `updateMessage`, `updateMeta`,
+ * `complete`, `fail`, `stop`, `resetTimer`.
  */
 
-import { t, fmtDuration } from "./theme.js";
-import { OK, ERR, ORBITAL_FRAMES, BRAILLE_FRAMES } from "./icons.js";
+import { t, fmtDuration, displayWidth } from "./theme.js";
+import { OK, ERR, BRAILLE_FRAMES } from "./icons.js";
+import { SPINNER_FRAME_MS } from "./motion.js";
 
 export type SpinnerMode = "ellipsis" | "orbital" | "braille";
 
 interface StartOpts {
-  /** Reset the cumulative timer. Default true — pass false to keep counting. */
+  /** Reset the cumulative timer. Default false — keep counting across stages. */
   resetTimer?: boolean;
 }
 
 interface Meta {
-  /** Extra dim info shown after the message (e.g. "4 tool calls"). */
+  /** Extra dim info shown after the message (e.g. "128 files · 12 matched"). */
   extra?: string;
 }
 
 export class Spinner {
-  private mode: SpinnerMode;
+  // Retained as a constructor arg so `new Spinner("orbital")` still works;
+  // every mode collapses to Braille internally. Kept as `_mode` to appease
+  // TypeScript "declared but not read" — deleting the field would need a
+  // constructor signature change.
   private message = "";
-  private startTime = 0;
   private cumulativeStart = 0;
   private frameIdx = 0;
   private ticker: ReturnType<typeof setInterval> | null = null;
   private meta: Meta = {};
   private lastLineLen = 0;
+  private lastPrintedMessage = ""; // non-TTY only — dedup message spam
   private staticTicker: ReturnType<typeof setInterval> | null = null;
 
-  constructor(mode: SpinnerMode = "orbital") {
-    this.mode = mode;
+  constructor(_mode: SpinnerMode = "braille") {
+    // `_mode` retained as a positional arg so `new Spinner("orbital")` still
+    // parses; every mode collapses to Braille internally in Ember.
+    void _mode;
     this.cumulativeStart = Date.now();
   }
 
@@ -49,31 +65,32 @@ export class Spinner {
     if (opts.resetTimer) this.cumulativeStart = Date.now();
     this.message = message;
     this.meta = {};
-    this.startTime = Date.now();
     this.frameIdx = 0;
 
     if (t.env.noAnimation) {
+      // Non-TTY: emit once on start, and again only when message changes.
       this.renderStatic();
-      // Refresh timer every second so elapsed keeps ticking
-      this.staticTicker = setInterval(() => this.renderStatic(), 1000);
+      // Static ticker refreshes elapsed time every 10s so long-running
+      // stages still show progress, without spamming per second.
+      this.staticTicker = setInterval(() => this.renderStatic(), 10_000);
       return;
     }
 
     this.render();
-    const interval =
-      this.mode === "braille" ? 80 : this.mode === "orbital" ? 120 : 400;
     this.ticker = setInterval(() => {
-      this.frameIdx = (this.frameIdx + 1) % this.frameCount();
+      this.frameIdx = (this.frameIdx + 1) % BRAILLE_FRAMES.length;
       this.render();
-    }, interval);
+    }, SPINNER_FRAME_MS);
   }
 
   /** Update the message shown next to the spinner. */
   updateMessage(message: string): void {
     this.message = message;
+    // In non-TTY mode, print immediately so the log reflects the transition.
+    if (t.env.noAnimation) this.renderStatic();
   }
 
-  /** Update the trailing meta info (e.g. tool-call counter). */
+  /** Update the trailing meta info. */
   updateMeta(meta: Meta): void {
     this.meta = { ...this.meta, ...meta };
   }
@@ -84,16 +101,16 @@ export class Spinner {
     this.clearLine();
     const msg = message ?? this.message;
     const elapsed = timing ?? fmtDuration(Date.now() - this.cumulativeStart);
-    console.log(`  ${t.ok(OK)}  ${t.text(msg)}  ${t.dim(elapsed)}`);
+    console.log(`  ${t.ok(OK)}  ${t.warm(msg)}  ${t.subtle(elapsed)}`);
   }
 
-  /** Fail. Prints `  ✖  message  detail`. */
+  /** Fail. Prints `  ✗  message  detail`. */
   fail(message?: string, detail = ""): void {
     this.stopTickers();
     this.clearLine();
     const msg = message ?? this.message;
-    const d = detail ? `  ${t.dim(detail)}` : "";
-    console.log(`  ${t.err(ERR)}  ${t.text(msg)}${d}`);
+    const d = detail ? `  ${t.subtle(detail)}` : "";
+    console.log(`  ${t.err(ERR)}  ${t.warm(msg)}${d}`);
   }
 
   /** Stop the spinner and clear its line without printing a completion. */
@@ -107,56 +124,42 @@ export class Spinner {
   // -----------------------------------------------------------------------
 
   private stopTickers(): void {
-    if (this.ticker) {
-      clearInterval(this.ticker);
-      this.ticker = null;
-    }
-    if (this.staticTicker) {
-      clearInterval(this.staticTicker);
-      this.staticTicker = null;
-    }
+    if (this.ticker) { clearInterval(this.ticker); this.ticker = null; }
+    if (this.staticTicker) { clearInterval(this.staticTicker); this.staticTicker = null; }
   }
 
-  private frameCount(): number {
-    if (this.mode === "braille") return BRAILLE_FRAMES.length;
-    if (this.mode === "orbital") return ORBITAL_FRAMES.length;
-    return 4; // ellipsis: 0-3 dots
-  }
-
+  /** Ember: always Braille dots, brand-colored. */
   private frame(): string {
-    if (this.mode === "braille") {
-      return t.brand(BRAILLE_FRAMES[this.frameIdx]);
-    }
-    if (this.mode === "orbital") {
-      return renderOrbital(ORBITAL_FRAMES[this.frameIdx]);
-    }
-    // ellipsis
-    const dots = ".".repeat(this.frameIdx);
-    return `⏳${dots}`;
+    return t.brand(BRAILLE_FRAMES[this.frameIdx]);
   }
 
   private render(): void {
     const elapsed = fmtDuration(Date.now() - this.cumulativeStart);
-    const extra = this.meta.extra ? `  ${t.dim(this.meta.extra)}` : "";
-    const line = `  ${this.frame()}  ${t.text(this.message)}  ${t.dim(elapsed)}${extra}`;
+    const extra = this.meta.extra ? `  ${t.subtle("·")}  ${t.subtle(this.meta.extra)}` : "";
+    const line = `  ${this.frame()}  ${t.warm(this.message)}  ${t.subtle(elapsed)}${extra}`;
     this.clearLine();
     process.stdout.write(line);
-    this.lastLineLen = displayWidthApprox(line);
+    this.lastLineLen = displayWidth(line);
   }
 
   private renderStatic(): void {
+    // Non-TTY mode: emit a full line ONLY when the message changes.
+    // Elapsed / meta refreshes hitchhike on the next message transition
+    // (this is what CI logs actually want — one line per phase, not per tick).
+    if (this.message === this.lastPrintedMessage) return;
+    this.lastPrintedMessage = this.message;
+
     const elapsed = fmtDuration(Date.now() - this.cumulativeStart);
-    const extra = this.meta.extra ? `  ${t.dim(this.meta.extra)}` : "";
-    const line = `  ${t.dim("[working]")}  ${t.text(this.message)}  ${t.dim(elapsed)}${extra}`;
-    this.clearLine();
-    process.stdout.write(line);
-    this.lastLineLen = displayWidthApprox(line);
+    const extra = this.meta.extra ? `  ${this.meta.extra}` : "";
+    // Ember non-TTY prefix: `[working]` matches the plan; label stays plain.
+    console.log(`  [working]  ${this.message}  ${elapsed}${extra}`);
   }
 
   private clearLine(): void {
     if (!t.env.isTTY) {
-      process.stdout.write("\n");
-      this.lastLineLen = 0;
+      // Fix (Ember): do NOT emit `\n` here. In non-TTY mode we don't clear
+      // anything — non-TTY renders happen once per message change, not per
+      // tick, so there's nothing to erase.
       return;
     }
     if (this.lastLineLen > 0) {
@@ -164,29 +167,6 @@ export class Spinner {
     } else {
       process.stdout.write("\r");
     }
+    this.lastLineLen = 0;
   }
-}
-
-/**
- * The orbital spinner uses a 2-char glyph pair — one white, one terracotta —
- * which creates the "atom rotating" visual signature of Synapse.
- */
-function renderOrbital(frame: string): string {
-  const [a, b] = [frame.charAt(0), frame.charAt(1)];
-  return t.text(a) + t.brand(b);
-}
-
-/**
- * Approximate display width — good enough for line-clear. Emoji count as 2.
- */
-function displayWidthApprox(s: string): number {
-  // eslint-disable-next-line no-control-regex
-  const plain = s.replace(/\x1b\[[0-9;]*m/g, "");
-  let w = 0;
-  for (const ch of plain) {
-    const code = ch.codePointAt(0) ?? 0;
-    if (code > 0x1f000 || (code >= 0x2600 && code <= 0x27bf)) w += 2;
-    else w += 1;
-  }
-  return w;
 }

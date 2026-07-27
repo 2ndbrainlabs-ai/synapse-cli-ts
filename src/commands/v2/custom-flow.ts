@@ -6,14 +6,14 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { input, checkbox, select } from "@inquirer/prompts";
+import { input, checkbox } from "@inquirer/prompts";
+import { askSelect } from "../../ui/prompt.js";
 import type { SurfaceManifest, SurfaceFunction } from "../../extractors/core/surface-manifest.js";
 import { getBackendConfig } from "../../config/manager.js";
-import { t, stepOk, stepInfo, stepWarn, sectionHeader } from "../../ui/theme.js";
+import { t, stepInfo, stepWarn, sectionHeader } from "../../ui/theme.js";
 import { roundedBox } from "../../ui/box.js";
 import { Spinner } from "../../ui/spinner.js";
 import { CodeGenerationUI } from "../../ui/code-gen-ui.js";
-import { BULLET } from "../../ui/icons.js";
 import {
   rankFunctionsInPlace,
   computeCallSiteCounts,
@@ -338,24 +338,41 @@ function groupByHint(
   return groups;
 }
 
+/** Ember confidence bar: never render numeric — bars carry meaning + reduce noise. */
+function confidenceBar(conf: number): string {
+  if (conf >= 0.8) return t.ok("━━━") + "  " + t.subtle("high");
+  if (conf >= 0.5) return t.warn("━━─") + "  " + t.subtle("med");
+  return t.faint("━──") + "  " + t.subtle("low");
+}
+
 async function pickProposal(
   proposals: WorkflowProposal[],
 ): Promise<WorkflowProposal | null> {
   const CUSTOM_VALUE = "__CUSTOM__";
+  // Each proposal renders as a two-line card in the choice name:
+  //   ●  proposal_name                    ━━━  high · 3 tools
+  //      one-line description here
   const choices: Array<{ name: string; value: string; description?: string }> = proposals.map(
-    (p, i) => ({
-      name: `${t.brand(p.name)}  ${t.dim(`(${p.functions.length} fn, conf ${p.confidence.toFixed(2)})`)}`,
-      value: String(i),
-      description: p.purpose,
-    }),
+    (p, i) => {
+      const bar = confidenceBar(p.confidence);
+      const meta = `${bar}  ${t.subtle("·")}  ${t.subtle(`${p.functions.length} tools`)}`;
+      const line1 = `${t.brandBold(p.name)}  ${meta}`;
+      const line2 = t.italic(t.subtle(`  ${p.purpose}`));
+      return {
+        name: `${line1}\n${line2}`,
+        value: String(i),
+      };
+    },
   );
-  choices.push({ name: t.dim("Custom — describe your own workflow instead"), value: CUSTOM_VALUE });
+  choices.push({
+    name: `${t.subtle("Custom — describe your own workflow instead")}`,
+    value: CUSTOM_VALUE,
+  });
 
-  const picked = await select<string>({
-    message: "Pick a workflow proposal to compose:",
+  const picked = await askSelect<string>({
+    message: "Pick a workflow to compose:",
     choices,
-    pageSize: 10,
-    loop: false,
+    pageSize: 12,
   });
   if (picked === CUSTOM_VALUE) return null;
   const idx = Number(picked);
@@ -530,66 +547,24 @@ export async function runCustomFlow(opts: CustomFlowOptions): Promise<void> {
   ]));
 
   const relOutput = path.relative(opts.workingDir, written);
-  const boxLines: string[] = [];
-  boxLines.push(`${t.dim("Tool:")}      ${t.num(result.tool_name || "custom_tool")}`);
-  boxLines.push(`${t.dim("Language:")}  ${opts.manifest.language}`);
-  boxLines.push(`${t.dim("Output:")}    ${t.path(relOutput)}`);
-  // Session id — quote this when reporting an issue; matches Langfuse trace.
-  if (opts.sessionId) {
-    boxLines.push(`${t.dim("Session:")}   ${t.subtle(opts.sessionId)}`);
-  }
-
-  if (envVars.length > 0) {
-    boxLines.push("");
-    boxLines.push(`${t.dim("Required environment variables:")}`);
-    for (const v of envVars) {
-      boxLines.push(`  ${t.warn(BULLET)} ${t.cmd(v)}`);
-    }
-  }
-
-  boxLines.push("");
-  boxLines.push(`${t.dim("Next steps:")}`);
-  boxLines.push(`  ${t.num("1.")} Review ${t.path(relOutput)}`);
-  boxLines.push(`  ${t.num("2.")} ${t.cmd("pip install mcp")}`);
-  boxLines.push(`  ${t.num("3.")} ${t.cmd(`python ${relOutput}`)}`);
-
-  console.log();
-  roundedBox("MCP Server Generated", "✓", t.ok, boxLines);
-
-  // MCP client config — printed outside the box, copy-paste friendly.
   const absOutput = path.resolve(opts.workingDir, written);
-  const configName = `synapse-${result.tool_name || "custom-tool"}`.replace(/_/g, "-");
-  const mcpServerConfig: Record<string, unknown> = {
-    command: "python",
-    args: [absOutput],
-  };
-  if (envVars.length > 0) {
-    const envObj: Record<string, string> = {};
-    for (const v of envVars) envObj[v] = "";
-    mcpServerConfig.env = envObj;
-  }
-  const configSnippet = JSON.stringify(
-    { mcpServers: { [configName]: mcpServerConfig } },
-    null,
-    2,
-  );
-  console.log();
-  console.log(`  ${t.dim("Add this to your MCP client config:")}`);
-  console.log();
-  for (const line of configSnippet.split("\n")) {
-    console.log(`    ${t.subtle(line)}`);
-  }
-  console.log();
+  const mcpEnv: Record<string, string> = {};
+  for (const v of envVars) mcpEnv[v] = "";
 
-  if (envVars.length > 0) {
-    stepWarn(
-      `Set ${envVars.length} environment variable${envVars.length === 1 ? "" : "s"} before running:`,
-      envVars.join(", "),
-    );
-    console.log();
-  }
-  if (opts.sessionId) {
-    stepInfo("Session", `${opts.sessionId}  ${t.dim("— quote this when reporting an issue")}`);
-  }
-  stepOk("Done");
+  // Ember shared success surface. Handles the copy-paste JSON block +
+  // language-aware next steps + ✦ Ready line for us.
+  const { renderSuccessMcp } = await import("../../ui/success.js");
+  renderSuccessMcp({
+    toolName: result.tool_name || "custom_tool",
+    language: opts.manifest.language,
+    outputPath: relOutput,
+    sessionId: opts.sessionId,
+    envVars,
+    mcpConfig: {
+      command: opts.manifest.language === "python" ? "python" : "node",
+      args: [absOutput],
+      ...(envVars.length > 0 ? { env: mcpEnv } : {}),
+    },
+    subtitle: "custom-mode tool",
+  });
 }

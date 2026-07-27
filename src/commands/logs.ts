@@ -115,7 +115,8 @@ function printErrorRecord(err: SessionErrorPayload & { at: number }): void {
 export async function runLogs(opts: LogsOptions): Promise<void> {
   const workingDir = process.cwd();
 
-  // List mode: show every session known to this repo.
+  // List mode: show every session known to this repo, in an aligned table
+  // (or stacked records on narrow terminals).
   if (opts.list) {
     const repoHash = computeRepoHash(workingDir);
     const dir = path.join(getProjectSynapseDir(workingDir), "discover");
@@ -128,9 +129,18 @@ export async function runLogs(opts: LogsOptions): Promise<void> {
       stepInfo("No sessions", "run `synapse build` to create one");
       return;
     }
-    console.log();
-    console.log("  " + t.brandBold("Discover sessions for this repo:"));
-    console.log();
+
+    interface SessionRow {
+      sid: string;
+      mode: string;
+      started: number;
+      status: { label: string; color: (s: string) => string };
+      scanned: number;
+      endpoints: number;
+      functions: number;
+    }
+
+    const rows: SessionRow[] = [];
     for (const f of files) {
       const sid = f.slice(0, -".jsonl".length);
       const records = readLedger(workingDir, sid);
@@ -138,10 +148,31 @@ export async function runLogs(opts: LogsOptions): Promise<void> {
       if (!meta || meta.repo_hash !== repoHash) continue;
       const term = terminalState(records);
       const counts = fmtCounts(records);
-      console.log(
-        `  ${t.subtle(sid)}  ${term.color(term.label)}  ${t.dim(`scanned ${counts.scanned}, ${counts.endpoints} ep, ${counts.functions} fn — ${relTime(meta.started_at)}`)}`,
-      );
+      rows.push({
+        sid,
+        mode: meta.mode,
+        started: meta.started_at,
+        status: term,
+        scanned: counts.scanned,
+        endpoints: counts.endpoints,
+        functions: counts.functions,
+      });
     }
+    rows.sort((a, b) => b.started - a.started);
+
+    const { renderTable } = await import("../ui/table.js");
+    console.log();
+    console.log(`  ${t.bold(t.primary("Sessions"))}  ${t.subtle(`(${rows.length} total)`)}`);
+    console.log();
+    renderTable<SessionRow>(rows, [
+      { header: "ID",       get: (r) => t.subtle(r.sid) },
+      { header: "Mode",     get: (r) => t.warm(r.mode) },
+      { header: "Started",  get: (r) => t.subtle(relTime(r.started)) },
+      { header: "Status",   get: (r) => r.status.color(r.status.label) },
+      { header: "Files",    get: (r) => t.num(String(r.scanned)) },
+      { header: "Endpts",   get: (r) => t.num(String(r.endpoints)) },
+      { header: "Fns",      get: (r) => t.num(String(r.functions)) },
+    ]);
     console.log();
     return;
   }
@@ -182,7 +213,7 @@ export async function runLogs(opts: LogsOptions): Promise<void> {
   summary.push("");
   summary.push(`${t.dim("Logs file:")} ${t.subtle(filePath)}`);
 
-  roundedBox("Session Log", "📄", t.brand, summary);
+  roundedBox({ glyph: "i", glyphColor: t.info, title: "Session Log", body: summary });
 
   if (errors.length > 0) {
     console.log();

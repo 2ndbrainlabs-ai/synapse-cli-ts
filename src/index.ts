@@ -62,7 +62,20 @@ program
   .name("synapse")
   .description("Synapse - Agentic MCP Server Generator")
   .version(pkg.version)
-  .option("--dev", "Use local backend (localhost:50051)");
+  .option("--dev", "Use local backend (localhost:50051)")
+  .option(
+    "-y, --yes",
+    "Skip every interactive prompt (use defaults / first choice). Sets SYNAPSE_NON_INTERACTIVE=1 for the rest of the process.",
+  )
+  .hook("preAction", (thisCommand) => {
+    // Propagate --yes as an env var so any nested import can see it without
+    // threading a flag through every function signature. Also set implicitly
+    // when the CLI isn't attached to a TTY (piped output, CI).
+    const opts = thisCommand.opts();
+    if (opts.yes || !process.stdout.isTTY) {
+      process.env.SYNAPSE_NON_INTERACTIVE = "1";
+    }
+  });
 
 // Show dev mode notice
 if (process.argv.includes("--dev") || process.env.SYNAPSE_DEV === "1") {

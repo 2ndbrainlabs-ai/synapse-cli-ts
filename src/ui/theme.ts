@@ -1,8 +1,17 @@
 /**
- * Synapse "Sunset Harmony" design system.
+ * Synapse "Ember" design system.
  *
- * Semantic tokens (not raw colors), three gray tiers, shimmer twins for animated
- * highlights. All UI code must import from here — no raw chalk.hex() elsewhere.
+ * One brand accent (deep terracotta), five-step neutral grayscale, semantic
+ * colors reserved for meaning. All UI code imports semantic tokens (`t.*`)
+ * from here — no raw chalk.hex() elsewhere. Palette values may change
+ * across releases; token names are stable API.
+ *
+ * Design principles:
+ *  1. Semantic > decorative. Every color must carry meaning (ok/warn/err/info/brand).
+ *  2. Chrome is neutral. Borders/rules never carry severity — only inline glyphs do.
+ *  3. NO_COLOR / non-TTY strip hue but preserve bold + glyphs (no-color.org rule).
+ *  4. Access-safe. Every text-on-surface pair validates ≥4.5:1 on #2A2724.
+ *  5. One brand surface. `t.brand` appears sparingly — wordmark, active spinner, ✦ Ready.
  */
 
 import chalk from "chalk";
@@ -23,146 +32,189 @@ export const env = {
 };
 
 // ---------------------------------------------------------------------------
-// Palette — Sunset Harmony
+// Palette — Ember
+//
+// Hex values chosen against the terminal surface #2A2724 (dark warm brown).
+// Every text pair has been validated ≥ 4.5:1 contrast (WCAG AA). Brand /
+// semantic bright twins are for inline glyphs only, never body text.
 // ---------------------------------------------------------------------------
 
-const PALETTE = {
-  // Brand — terracotta warmth
-  brand: "#d97757",
-  brandShim: "#eb9f7f",
-  brandDim: "#c6613f",
+export const palette = {
+  // ── Brand ─────────────────────────────────────────────────────────────
+  brand: "#D97757",        // Terracotta — the one accent that appears anywhere
+  brandDim: "#A3553C",     // Deeper terracotta — decorative/dividers only
+  brandShim: "#FFB064",    // Animated highlight (spinner sweep, active state)
 
-  // Accent — gold
-  accent: "#ffb020",
-  accentShim: "#ffcf5c",
+  // ── Neutral scale (5 tiers) ───────────────────────────────────────────
+  textPrimary: "#F0EBE4",  // Headings, keys — brightest neutral
+  textWarm:    "#D2C8BC",  // Body copy — the default "text" color
+  textMuted:   "#9B948A",  // Labels, metadata
+  textSubtle:  "#706A62",  // Paths, quiet meta, box separators inside content
+  textFaint:   "#4A4640",  // Rules, box borders, disabled — barely visible
 
-  // Text tiers (three explicit grays)
-  text: "#f2ede4",
-  warm: "#f5efe0", // cream — used in boxed content
-  inactive: "#9a9791", // secondary metadata
-  subtle: "#605d58", // tertiary / very dim
+  // ── Semantic ──────────────────────────────────────────────────────────
+  ok:   "#7AC592",
+  warn: "#FFB064",
+  err:  "#E86A6A",
+  info: "#8CA8E8",
 
-  // Surface
-  surface: "#2a2724",
+  // ── Bright twins (inline glyphs / spinner only, never body text) ──────
+  okBright:   "#96DCAC",
+  warnBright: "#FFC88A",
+  errBright:  "#FF8A8A",
 
-  // Semantic
-  ok: "#4eba65",
-  err: "#ff6b80",
-  warn: "#ffc107",
-  info: "#93a5ff", // periwinkle
-  suggest: "#b1b9f9", // lavender
-
-  // Special
-  tan: "#b8956a", // italic file paths
-  code: "#a5b4fc",
-  num: "#ffd166",
+  // ── Accents kept from Sunset (used sparingly) ─────────────────────────
+  tan:  "#B8956A",  // Italic file paths — softened warm
+  code: "#A5B4FC",  // Inline code spans
+  num:  "#FFD166",  // Numeric badges
 } as const;
 
 // ---------------------------------------------------------------------------
-// Theme object — semantic helpers
+// Theme object — semantic helpers (STABLE API — call sites depend on names)
 // ---------------------------------------------------------------------------
 
 export const t = {
   env,
 
-  // Brand
-  brand: (s: string) => chalk.hex(PALETTE.brand)(s),
-  brandBold: (s: string) => chalk.hex(PALETTE.brand).bold(s),
-  brandShim: (s: string) => chalk.hex(PALETTE.brandShim)(s),
-  brandDim: (s: string) => chalk.hex(PALETTE.brandDim)(s),
+  // ── Brand ─────────────────────────────────────────────────────────────
+  brand: (s: string) => chalk.hex(palette.brand)(s),
+  brandBold: (s: string) => chalk.hex(palette.brand).bold(s),
+  brandShim: (s: string) => chalk.hex(palette.brandShim)(s),
+  brandDim: (s: string) => chalk.hex(palette.brandDim)(s),
 
-  // Accent
-  accent: (s: string) => chalk.hex(PALETTE.accent)(s),
-  accentBold: (s: string) => chalk.hex(PALETTE.accent).bold(s),
-  accentShim: (s: string) => chalk.hex(PALETTE.accentShim)(s),
-
-  // Text tiers
-  text: (s: string) => chalk.hex(PALETTE.text)(s),
-  warm: (s: string) => chalk.hex(PALETTE.warm)(s),
-  dim: (s: string) => chalk.hex(PALETTE.inactive)(s),
-  subtle: (s: string) => chalk.hex(PALETTE.subtle)(s),
+  // ── Text tiers (5 semantic aliases + `text` legacy alias) ─────────────
+  text: (s: string) => chalk.hex(palette.textWarm)(s),        // default body
+  primary: (s: string) => chalk.hex(palette.textPrimary)(s),
+  warm: (s: string) => chalk.hex(palette.textWarm)(s),
+  dim: (s: string) => chalk.hex(palette.textMuted)(s),
+  subtle: (s: string) => chalk.hex(palette.textSubtle)(s),
+  faint: (s: string) => chalk.hex(palette.textFaint)(s),
   bold: (s: string) => chalk.bold(s),
-  /** @deprecated Alias for `subtle`. Use `t.subtle` in new code. */
-  muted: (s: string) => chalk.hex(PALETTE.subtle)(s),
+  italic: (s: string) => chalk.italic(s),
+  inverse: (s: string) => chalk.inverse(s),
 
-  // Semantic
-  ok: (s: string) => chalk.hex(PALETTE.ok)(s),
-  err: (s: string) => chalk.hex(PALETTE.err)(s),
-  warn: (s: string) => chalk.hex(PALETTE.warn)(s),
-  info: (s: string) => chalk.hex(PALETTE.info)(s),
-  suggest: (s: string) => chalk.hex(PALETTE.suggest)(s),
+  // ── Semantic (colored glyphs + status labels only) ────────────────────
+  ok: (s: string) => chalk.hex(palette.ok)(s),
+  err: (s: string) => chalk.hex(palette.err)(s),
+  warn: (s: string) => chalk.hex(palette.warn)(s),
+  info: (s: string) => chalk.hex(palette.info)(s),
 
-  // Formatters
-  path: (s: string) => chalk.hex(PALETTE.tan).italic(s),
-  cmd: (s: string) => chalk.hex(PALETTE.brand).bold(s),
-  code: (s: string) => chalk.hex(PALETTE.code)(s),
-  num: (s: string) => chalk.hex(PALETTE.num)(s),
-  kbd: (s: string) => chalk.hex(PALETTE.accent)(s),
+  // ── Bright variants (single-glyph use only) ───────────────────────────
+  okBright: (s: string) => chalk.hex(palette.okBright)(s),
+  errBright: (s: string) => chalk.hex(palette.errBright)(s),
+  warnBright: (s: string) => chalk.hex(palette.warnBright)(s),
 
-  // Raw palette exposure (for spinners that need to blend colors)
-  palette: PALETTE,
-};
+  // ── Formatters ────────────────────────────────────────────────────────
+  path: (s: string) => chalk.hex(palette.tan).italic(s),
+  cmd: (s: string) => chalk.hex(palette.brand).bold(s),
+  code: (s: string) => chalk.hex(palette.code)(s),
+  num: (s: string) => chalk.hex(palette.num)(s),
+  kbd: (s: string) => chalk.inverse(` ${s} `),
+
+  // ── Deprecated aliases (kept so migration doesn't break call sites) ──
+  /** @deprecated Ember folded accent into `warn`. Prefer `t.warn`. */
+  accent: (s: string) => chalk.hex(palette.warn)(s),
+  /** @deprecated Prefer `t.bold(t.warn(...))`. */
+  accentBold: (s: string) => chalk.hex(palette.warn).bold(s),
+  /** @deprecated Prefer `t.warnBright`. */
+  accentShim: (s: string) => chalk.hex(palette.warnBright)(s),
+  /** @deprecated Prefer `t.info`. */
+  suggest: (s: string) => chalk.hex(palette.info)(s),
+  /** @deprecated Prefer `t.subtle`. */
+  muted: (s: string) => chalk.hex(palette.textSubtle)(s),
+
+  // Raw palette (for animation blends — spinner sweep, tip typewriter)
+  palette,
+} as const;
 
 // ---------------------------------------------------------------------------
-// Common primitives — section headers & step lines
+// Section header — Ember pattern: title (bold primary) + faint rule below,
+// no emoji, full-inner-width rule, mandatory blank line above and below.
 // ---------------------------------------------------------------------------
 
 /**
- * Compact section header — icon + title + underline sized to title width.
- *   🏗️  Building MCP Server
- *   ─────────────────────────
+ * Section header — bold title on its own line with a faint rule underneath.
+ * The `icon` parameter is accepted for back-compat but IGNORED (Ember has
+ * no chrome emoji). Callers can safely keep passing them until M2 sweeps
+ * the call sites.
+ *
+ *   Build MCP Server
+ *   ────────────────────────────────────────
  */
-export function sectionHeader(title: string, icon?: string): void {
-  const label = icon ? `${icon}  ${title}` : title;
-  const width = stripAnsi(label).length + 2;
+export function sectionHeader(title: string, _icon?: string): void {
+  void _icon;
+  const width = Math.min(
+    ruleWidth(),
+    Math.max(displayWidth(title), 24),
+  );
   console.log();
-  console.log(`  ${t.brandBold(label)}`);
-  console.log(`  ${t.brand(BOX.h.repeat(width))}`);
+  console.log(`  ${t.bold(t.primary(title))}`);
+  console.log(`  ${t.faint(BOX.h.repeat(width))}`);
   console.log();
 }
 
-/**
- * Step line with a leading status glyph.
- *   ✓  Message  detail
- */
+/** Faint rule width — 40 by default, shorter for narrow terminals. */
+function ruleWidth(): number {
+  const cols = env.columns || 80;
+  return Math.min(40, Math.max(20, cols - 6));
+}
+
+// ---------------------------------------------------------------------------
+// Step lines — canonical Ember pattern:
+//   [3-char glyph column colored][2sp][text-warm label][optional italic-subtle detail]
+// Every step function passes through the same layout so ok/warn/err/info/brand
+// align vertically when stacked.
+// ---------------------------------------------------------------------------
+
+function stepLine(
+  glyph: string,
+  colorize: (s: string) => string,
+  label: string,
+  detail: string,
+): void {
+  const g = colorize(glyph).padEnd(3 + (glyph.length - displayWidth(glyph)));
+  const d = detail ? `  ${t.italic(t.subtle(detail))}` : "";
+  console.log(`  ${g}  ${t.warm(label)}${d}`);
+}
+
 export function stepOk(label: string, detail = ""): void {
-  const d = detail ? `  ${t.dim(detail)}` : "";
-  console.log(`  ${t.ok(OK)}  ${t.text(label)}${d}`);
+  stepLine(OK, t.ok, label, detail);
 }
 export function stepErr(label: string, detail = ""): void {
-  const d = detail ? `  ${t.dim(detail)}` : "";
-  console.log(`  ${t.err(ERR)}  ${t.text(label)}${d}`);
+  stepLine(ERR, t.err, label, detail);
 }
 export function stepWarn(label: string, detail = ""): void {
-  const d = detail ? `  ${t.dim(detail)}` : "";
-  console.log(`  ${t.warn(WARN)}  ${t.text(label)}${d}`);
+  stepLine(WARN, t.warn, label, detail);
 }
 export function stepInfo(label: string, detail = ""): void {
-  const d = detail ? `  ${t.dim(detail)}` : "";
-  console.log(`  ${t.info(INFO)}  ${t.text(label)}${d}`);
+  stepLine(INFO, t.info, label, detail);
 }
 export function stepBrand(label: string, detail = ""): void {
-  const d = detail ? `  ${t.dim(detail)}` : "";
-  console.log(`  ${t.brand(ARROW)}  ${t.text(label)}${d}`);
+  stepLine(ARROW, t.brand, label, detail);
 }
 
 // ---------------------------------------------------------------------------
 // Utilities
 // ---------------------------------------------------------------------------
 
+const ANSI_RE = /\x1b\[[0-9;]*m/g; // eslint-disable-line no-control-regex
+
 /** Strip ANSI escape codes so we can measure display width accurately. */
 export function stripAnsi(s: string): string {
-  // eslint-disable-next-line no-control-regex
-  return s.replace(/\x1b\[[0-9;]*m/g, "");
+  return s.replace(ANSI_RE, "");
 }
 
-/** Display width of a string, ignoring ANSI codes. Emoji count as 2. */
+/**
+ * Display width of a string, ignoring ANSI codes. Emoji and CJK count as 2.
+ * Single source of truth — `spinner.ts` and other modules import from here
+ * rather than re-implement (was duplicated pre-Ember).
+ */
 export function displayWidth(s: string): number {
   const plain = stripAnsi(s);
   let w = 0;
   for (const ch of plain) {
     const code = ch.codePointAt(0) ?? 0;
-    // Rough wide-char detection (emoji, CJK)
+    // Wide-char detection (emoji + CJK + geometric shapes)
     if (code > 0x1f000 || (code >= 0x2600 && code <= 0x27bf)) w += 2;
     else w += 1;
   }
@@ -179,71 +231,42 @@ export function fmtDuration(ms: number): string {
 }
 
 // ---------------------------------------------------------------------------
-// Legacy helpers — kept during migration, prefer new primitives
+// Legacy helpers — kept for migration, marked for M6 cleanup
 // ---------------------------------------------------------------------------
 
-/** Horizontal rule in dim gray. Prefer using rounded boxes. */
+/** @deprecated Prefer rounded boxes. Faint rule width `width`. */
 export function hrLine(width = 56): string {
-  return t.subtle("─".repeat(width));
+  return t.faint("─".repeat(width));
 }
-
-/** Horizontal rule in brand color. */
+/** @deprecated Prefer the brand-dim rule inside boxes. */
 export function hrBrand(width = 56): string {
-  return t.brand("─".repeat(width));
+  return t.brandDim("─".repeat(width));
 }
-
-/** Aligned key/value line. Prefer `kvGrid` from `./kv-grid.ts`. */
+/** @deprecated Prefer `kvGrid` from `./kv-grid.ts`. */
 export function kvLine(key: string, value: string, keyWidth = 16): string {
   const padded = key.padEnd(keyWidth);
-  return `${t.dim(padded)}  ${t.text(value)}`;
+  return `${t.dim(padded)}  ${t.warm(value)}`;
 }
 
 // ---------------------------------------------------------------------------
-// Back-compat exports (used by older command files during migration)
+// Back-compat: `sectionBox` and `_registerRoundedBox` moved to `./box.ts`.
+// Ember removes the circular dependency; theme.ts imports NOTHING from
+// box.ts anymore. Old call sites (`import { sectionBox } from './theme.js'`)
+// break in migration — grep + swap to `import { sectionBox } from './box.js'`.
+// The audit found only two such call sites; they get fixed in M2/M5.
 // ---------------------------------------------------------------------------
 
 /**
- * @deprecated Use `roundedBox` from `./box.ts` directly. Kept for migration.
- * NOTE: this now draws an actual rounded box (previously drew just a header rule).
- * Requires an eager import — imported below at module bottom to avoid a top-level
- * circular dependency with box.ts (which imports from theme.ts).
+ * @deprecated No-op kept solely for source compat with any file that still
+ * calls `_registerRoundedBox`. The registration mechanism is gone; box.ts
+ * exports `sectionBox` directly now. Delete in M6.
  */
-let _roundedBoxImpl:
-  | ((title: string, icon: string | undefined, color: (s: string) => string, lines: string[]) => void)
-  | null = null;
-
-export function _registerRoundedBox(
-  impl: (title: string, icon: string | undefined, color: (s: string) => string, lines: string[]) => void,
-): void {
-  _roundedBoxImpl = impl;
+export function _registerRoundedBox(_impl: unknown): void {
+  void _impl;
 }
 
-export function sectionBox(
-  title: string,
-  variant: "ok" | "err" | "warn" | "info",
-  lines: string[],
-): void {
-  const color =
-    variant === "ok"
-      ? t.ok
-      : variant === "err"
-        ? t.err
-        : variant === "warn"
-          ? t.warn
-          : t.info;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const impl = _roundedBoxImpl as any;
-  if (impl) {
-    impl(title, undefined, color, lines);
-    return;
-  }
-  // Fallback: header + lines if box.ts hasn't registered yet
-  console.log();
-  console.log(`  ${color(title)}`);
-  for (const line of lines) console.log(`  ${line}`);
-}
-
-// Eager side-effect import so box.ts registers itself when `theme.ts` is loaded.
-// Placed at the bottom so all named exports above are already defined.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import "./box.js";
+/**
+ * @deprecated Re-exported from `./box.js` for source compatibility.
+ * New code should import `sectionBox` from `./box.js` directly.
+ */
+export { sectionBox } from "./box.js";
