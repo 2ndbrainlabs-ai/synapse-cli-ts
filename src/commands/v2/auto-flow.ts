@@ -49,6 +49,9 @@ export interface AutoFlowOptions {
   manifest: SurfaceManifest;
   serverName?: string; // if omitted, derives from workingDir basename
   baseUrl?: string; // if provided (--base-url flag), skips the prompt
+  /** Session id (from SessionManager) — echoed in the success footer so
+   *  users can quote it when reporting an issue. */
+  sessionId?: string;
 }
 
 export async function runAutoFlow(opts: AutoFlowOptions): Promise<void> {
@@ -150,4 +153,8 @@ export async function runAutoFlow(opts: AutoFlowOptions): Promise<void> {
     console.log("    " + t.subtle(line));
   }
   console.log();
+  if (opts.sessionId) {
+    stepInfo("Session", `${opts.sessionId}  ${t.dim("— quote this when reporting an issue")}`);
+  }
+  stepOk("Done");
 }

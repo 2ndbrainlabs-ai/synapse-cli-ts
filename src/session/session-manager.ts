@@ -5,7 +5,7 @@
 // gRPC client, custom-flow) share a single abort signal so time-cap / Ctrl-C
 // unwinds propagate cleanly.
 
-import type { LedgerRecord, PauseReason, ResumeState } from "./ledger.js";
+import type { LedgerRecord, PauseReason, ResumeState, SessionErrorPayload } from "./ledger.js";
 import { Ledger, buildResumeState, readLedger, sweepOldSessions } from "./ledger.js";
 
 const DEFAULT_MAX_TIME_MS = 15 * 60 * 1000;
@@ -147,6 +147,21 @@ export class SessionManager {
       /* the abort still happens even if ledger write fails */
     }
     this.ac.abort();
+  }
+
+  /** Persist a structured error into the ledger. Safe to call from any stage;
+   *  the CLI's `synapse logs` command surfaces these when the user asks
+   *  "why did that fail?". */
+  recordError(payload: SessionErrorPayload): void {
+    try {
+      this.ledger.append({
+        type: "session_error",
+        at: Date.now(),
+        ...payload,
+      });
+    } catch {
+      /* ledger write must never crash the outer flow */
+    }
   }
 
   markDone(endpointsCount: number, functionsCount: number): void {

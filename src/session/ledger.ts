@@ -28,6 +28,21 @@ export interface FunctionVerdict {
   one_line_purpose?: string;
 }
 
+export interface SessionErrorPayload {
+  /** Stable machine code — one of ui/errors.ERROR_CODES or backend _errors. */
+  code: string;
+  /** Stage that failed (e.g. "extract", "classify", "shape", "render", "verify"). */
+  stage: string;
+  /** One-line human summary — same as WireError.user_message. */
+  message: string;
+  /** Optional hint / recovery guidance for the user. */
+  hint?: string;
+  /** Optional technical detail (top 8 lines only — full trail lives in server logs). */
+  technical?: string;
+  /** Optional missing-field paths (from Pydantic validation). */
+  missing_fields?: string[];
+}
+
 export type LedgerRecord =
   | {
       type: "session_open";
@@ -80,7 +95,11 @@ export type LedgerRecord =
       endpoints_count: number;
       functions_count: number;
       at: number;
-    };
+    }
+  | ({
+      type: "session_error";
+      at: number;
+    } & SessionErrorPayload);
 
 // -----------------------------------------------------------------------------
 // Ledger — one instance per session, opened lazily on first append.

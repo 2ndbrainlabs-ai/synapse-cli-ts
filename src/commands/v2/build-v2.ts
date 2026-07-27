@@ -159,6 +159,13 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
     });
   } catch (e) {
     spinner.fail("Extraction failed", String(e));
+    session.recordError({
+      code: "EXTRACTOR_FAILED",
+      stage: "extract",
+      message: "Couldn't extract the codebase surface.",
+      technical: String(e),
+      hint: "Check that the repo has valid Python source. If this repeats, share the ledger via `synapse logs`.",
+    });
     session.dispose();
     return;
   }
@@ -199,6 +206,7 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
         manifest,
         serverName: opts.serverName,
         baseUrl: opts.baseUrl,
+        sessionId,
       });
     } else {
       await runCustomFlow({
@@ -208,6 +216,7 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
         sessionId,
         signal: session.signal,
         deep: opts.deep,
+        session,
       });
     }
   } finally {

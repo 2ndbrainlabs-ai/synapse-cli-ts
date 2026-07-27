@@ -9,6 +9,50 @@ process.env.GRPC_VERBOSITY = "ERROR";
 process.env.GRPC_TRACE = "";
 process.env.GRPC_ENABLE_FORK_SUPPORT = "0";
 
+// ---------------------------------------------------------------------------
+// Clean-exit handlers: Ctrl-C / Esc during an @inquirer/prompts question
+// throws ExitPromptError as an unhandled rejection, which prints a scary
+// Node stack trace. Users should see one friendly line and exit 0.
+//
+// SIGINT outside a prompt (e.g. mid-extraction) is handled per-command via
+// SessionManager; the guard here only fires if that hasn't caught it.
+// ---------------------------------------------------------------------------
+function isUserAbortError(err: unknown): boolean {
+  if (!err) return false;
+  const anyErr = err as { name?: string; message?: string; code?: string };
+  return (
+    anyErr.name === "ExitPromptError" ||
+    anyErr.code === "ABORT_ERR" ||
+    (typeof anyErr.message === "string" &&
+      (anyErr.message.includes("SIGINT") ||
+        anyErr.message.includes("force closed the prompt")))
+  );
+}
+
+function printFriendlyCancel(): void {
+  // Small friendly nudge — matches the tone of the success box.
+  process.stdout.write("\n  \x1b[2m✖ Cancelled. Run \x1b[0m\x1b[36msynapse build\x1b[0m\x1b[2m again to retry.\x1b[0m\n\n");
+}
+
+process.on("uncaughtException", (err) => {
+  if (isUserAbortError(err)) {
+    printFriendlyCancel();
+    process.exit(0);
+  }
+  // Anything else: preserve default Node behavior.
+  console.error(err);
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason) => {
+  if (isUserAbortError(reason)) {
+    printFriendlyCancel();
+    process.exit(0);
+  }
+  console.error(reason);
+  process.exit(1);
+});
+
 const require = createRequire(import.meta.url);
 const pkg = require("../package.json");
 
@@ -108,6 +152,20 @@ program
   .action(async () => {
     const { runInfo } = await import("./commands/info.js");
     await runInfo();
+  });
+
+program
+  .command("logs [sessionId]")
+  .description("Inspect a discover session's log — status, errors, and the ledger path")
+  .option("--list", "List all discover sessions for this repo")
+  .option("--raw", "Print the raw JSONL ledger (useful for `synapse logs --raw | jq`)")
+  .action(async (sessionId: string | undefined, opts: { list?: boolean; raw?: boolean }) => {
+    const { runLogs } = await import("./commands/logs.js");
+    await runLogs({
+      sessionId,
+      list: opts.list ?? false,
+      raw: opts.raw ?? false,
+    });
   });
 
 program

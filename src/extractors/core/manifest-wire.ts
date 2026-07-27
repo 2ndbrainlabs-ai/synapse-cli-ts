@@ -1,22 +1,21 @@
 // src/extractors/core/manifest-wire.ts
 //
-// Serialise the SurfaceManifest for gRPC transport. Trims fields the backend
-// doesn't need to see and caps oversized strings so we don't blow the
-// default gRPC 4 MB message ceiling on large repos.
+// Serialise the SurfaceManifest for gRPC transport.
 //
-// Fields kept:
-//   language, framework, package_import_root, partial
-//   endpoints[]  (all fields, description clipped to 400 chars)
-//   functions[]  (module, qualname, signature clipped to 240, docstring clipped to 200,
-//                 is_async, is_public, file_path, start_line)
+// **This is a wire contract** — every required field on the backend's
+// `SurfaceFunction` / `HttpEndpoint` Pydantic models MUST appear here.
+// A contract test at __tests__/manifest-wire.contract.test.ts locks the
+// shape; missing/added required fields fail CI before they hit prod.
 //
-// Fields dropped:
-//   background_functions[]  — CLI-side only, not needed for classify/shape
-//   end_line                — not used by the LLM
-//   headers_hint            — kept for endpoints (used by runner)
-//   stats                   — CLI-side telemetry
-//   Any RankedFunction extras (score, call_site_count) — kept because
-//   they're small and the classifier can use them as hints.
+// Fields kept: everything the backend requires + everything the classifier
+//   can use as a hint (score, call_site_count).
+//
+// Trims applied (safe — none of these are required fields):
+//   - background_functions[]     : CLI-side ranked-tail; classifier doesn't need it
+//   - stats                      : CLI-side telemetry
+//   - docstring clipped to 200   : prevents multi-MB payloads on repos with essays
+//   - signature clipped to 240   : same reason
+//   - description clipped to 400 : same reason
 
 import type { SurfaceManifest } from "./surface-manifest.js";
 
@@ -53,6 +52,7 @@ export interface WireManifest {
     is_public: boolean;
     file_path: string;
     start_line: number;
+    end_line: number;
     // Optional classifier hints — carried when present.
     score?: number;
     call_site_count?: number;
@@ -86,6 +86,7 @@ export function serializeManifestForWire(manifest: SurfaceManifest): string {
         is_public: f.is_public,
         file_path: f.file_path,
         start_line: f.start_line,
+        end_line: f.end_line,
         ...(anyF.score != null ? { score: anyF.score } : {}),
         ...(anyF.call_site_count != null ? { call_site_count: anyF.call_site_count } : {}),
       };

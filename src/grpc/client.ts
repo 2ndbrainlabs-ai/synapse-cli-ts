@@ -885,6 +885,52 @@ export class SynapseClient {
       };
     }
 
+    // Retry loop — mirrors _buildOnce / _discoverOnce. Cold-start
+    // UNAVAILABLE (code 14) is the top failure mode here, so retry up to
+    // 3 times with exponential backoff before surfacing to the caller.
+    const MAX_ATTEMPTS = 3;
+    let lastResult: any = null;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      lastResult = await this._classifyOnce(grpc, SynapseService, apiKey, sessionId, opts);
+
+      if (!lastResult.__transient) {
+        const { __transient: _t, ...clean } = lastResult;
+        return clean;
+      }
+
+      if (attempt < MAX_ATTEMPTS) {
+        const backoff = Math.min(1000 * 2 ** (attempt - 1), 8000);
+        opts.onStatus?.(
+          "retrying",
+          `Backend cold-start — retrying (attempt ${attempt + 1}/${MAX_ATTEMPTS})`,
+          0.1,
+        );
+        await sleep(backoff);
+      }
+    }
+
+    const { __transient: _t, ...clean } = lastResult ?? {};
+    return {
+      ...clean,
+      error: `Classifier failed after ${MAX_ATTEMPTS} attempts: ${lastResult?.error ?? "unknown"}`,
+    };
+  }
+
+  private async _classifyOnce(
+    grpc: typeof import("@grpc/grpc-js"),
+    SynapseService: any,
+    apiKey: string,
+    sessionId: string,
+    opts: {
+      manifestJson: string;
+      shardSize?: number;
+      maxShards?: number;
+      signal?: AbortSignal;
+      onStatus?: (stage: string, message: string, progress: number) => void;
+      timeoutMs?: number;
+    },
+  ): Promise<any> {
     const target = `${this.host}:${this.port}`;
     const credentials = shouldUseSecure(this.host, this.port)
       ? grpc.credentials.createSsl()
@@ -910,12 +956,13 @@ export class SynapseClient {
         resolve({ ...payload, sessionId });
       };
 
-      // Soft timeout — if the backend doesn't respond (or doesn't recognise
-      // classify_request), fall back gracefully instead of hanging forever.
+      // Soft timeout — if the backend doesn't respond, fall back gracefully.
+      // Timeout is treated as transient (worth one retry).
       timeoutHandle = setTimeout(() => {
         finish({
           success: false, verdicts: [], shards_run: 0, cached_hits: 0,
           budget_dropped: 0, error: `timeout after ${timeoutMs}ms`,
+          __transient: true,
         });
       }, timeoutMs);
       timeoutHandle.unref?.();
@@ -924,6 +971,7 @@ export class SynapseClient {
         finish({
           success: false, verdicts: [], shards_run: 0, cached_hits: 0,
           budget_dropped: 0, error: "aborted",
+          __transient: false, // user aborted — don't retry
         });
       };
       opts.signal?.addEventListener("abort", abortHandler, { once: true });
@@ -954,11 +1002,13 @@ export class SynapseClient {
             cached_hits: r.cached_hits ?? 0,
             budget_dropped: r.budget_dropped ?? 0,
             error: r.error ?? "",
+            __transient: false,
           });
         } else if (msg.error) {
           finish({
             success: false, verdicts: [], shards_run: 0, cached_hits: 0,
             budget_dropped: 0, error: msg.error.message ?? "backend error",
+            __transient: false,
           });
         }
       });
@@ -967,13 +1017,17 @@ export class SynapseClient {
         finish({
           success: false, verdicts: [], shards_run: 0, cached_hits: 0,
           budget_dropped: 0, error: "stream ended before result",
+          __transient: true,
         });
       });
       call.on("error", (err: any) => {
+        const code = err.code as number | undefined;
+        const transient = code !== undefined && RETRYABLE_GRPC_CODES.has(code);
         finish({
           success: false, verdicts: [], shards_run: 0, cached_hits: 0,
           budget_dropped: 0,
           error: `gRPC error: ${err.code ?? "UNKNOWN"}: ${err.details ?? err.message}`,
+          __transient: transient,
         });
       });
     });
