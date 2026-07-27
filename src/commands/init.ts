@@ -12,28 +12,27 @@ import {
   setProjectApiKey,
 } from "../config/manager.js";
 import { getProjectSynapseDir } from "../config/paths.js";
+import { t, stepOk } from "../ui/theme.js";
+import { roundedBox } from "../ui/box.js";
+import { displayBanner, displayHeader, displayWelcome } from "../ui/banner.js";
+import { styledInput } from "../ui/styled-input.js";
 
 export async function runInit(force: boolean): Promise<void> {
   const workingDir = process.cwd();
   const synapseDir = getProjectSynapseDir(workingDir);
 
-  const { t, sectionBox, stepOk } = await import("../ui/theme.js");
-
   if (isInitialized(workingDir) && !force) {
-    sectionBox("Already Initialized", "warn", [
+    roundedBox("Already Initialized", "⚠", t.warn, [
       "Synapse is already initialized in this directory.",
+      "",
       `Run ${t.cmd("synapse init --force")} to re-initialize.`,
     ]);
     return;
   }
 
-  const { displayBanner, displayHeader } = await import("../ui/banner.js");
-  const { promptMaskedInput } = await import("../ui/prompts.js");
-
   displayBanner();
-  displayHeader("Initialize");
+  displayHeader("Initialize", "🎉");
 
-  // Ensure directories
   ensureGlobalSynapseDir();
   ensureProjectSynapseDir(workingDir);
 
@@ -50,12 +49,18 @@ export async function runInit(force: boolean): Promise<void> {
 
   if (!rawKey) {
     console.log();
-    console.log(`  ${t.dim("Enter your Synapse API key")}  ${t.muted("get one at synaps3.ai")}`);
+    console.log(
+      `  ${t.dim("Enter your Synapse API key")}  ${t.subtle("get one at synaps3.ai")}`,
+    );
     console.log();
-    const inputKey = await promptMaskedInput("  API Key: ");
+    const inputKey = await styledInput({
+      message: "API Key",
+      mask: true,
+    });
     if (!inputKey || !inputKey.trim()) {
-      sectionBox("Missing API Key", "err", [
+      roundedBox("Missing API Key", "✖", t.err, [
         "API key is required to use Synapse.",
+        "",
         `Run ${t.cmd("synapse init")} again to set one.`,
       ]);
       return;
@@ -80,13 +85,13 @@ export async function runInit(force: boolean): Promise<void> {
   try {
     const { trackEvent } = await import("../grpc/telemetry.js");
     trackEvent("init", rawKey ?? "", workingDir).catch(() => {});
-  } catch { /* optional */ }
+  } catch {
+    /* optional */
+  }
 
-  sectionBox("Ready", "ok", [
-    "Synapse initialized successfully.",
-    "",
-    `${t.dim("Next steps:")}`,
-    `  ${t.num("1.")} ${t.cmd("synapse analyze")}  ${t.dim("Scan and index your codebase")}`,
-    `  ${t.num("2.")} ${t.cmd("synapse build")}    ${t.dim("Generate an MCP server")}`,
+  displayWelcome([
+    "synapse analyze",
+    "synapse build",
+    "synapse info",
   ]);
 }

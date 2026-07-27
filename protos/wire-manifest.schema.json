@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://synaps3.ai/schemas/wire-manifest.json",
+  "title": "SurfaceManifest (wire)",
+  "description": "The exact shape the CLI sends to the backend inside custom_tool_request.manifest_json and classify_request.manifest_json. Both sides validate against this file so a field addition on one side fails CI until the other side is updated.",
+  "type": "object",
+  "required": ["language", "package_import_root", "endpoints", "functions"],
+  "properties": {
+    "language": {
+      "type": "string",
+      "enum": ["python", "typescript", "javascript", "java", "csharp", "go", "rust"]
+    },
+    "framework": { "type": ["string", "null"] },
+    "package_import_root": { "type": "string" },
+    "partial": { "type": "boolean" },
+    "endpoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "method",
+          "path",
+          "handler_module",
+          "handler_qualname",
+          "suggested_tool_name"
+        ],
+        "properties": {
+          "method": {
+            "type": "string",
+            "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]
+          },
+          "path": { "type": "string" },
+          "handler_module": { "type": "string" },
+          "handler_qualname": { "type": "string" },
+          "description": { "type": "string" },
+          "payload_example": { "type": ["object", "null"] },
+          "headers_hint": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["key", "value"],
+              "properties": {
+                "key": { "type": "string" },
+                "value": { "type": "string" }
+              }
+            }
+          },
+          "suggested_tool_name": { "type": "string" }
+        }
+      }
+    },
+    "functions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "module",
+          "qualname",
+          "signature",
+          "file_path",
+          "start_line",
+          "end_line"
+        ],
+        "properties": {
+          "module": { "type": "string" },
+          "qualname": { "type": "string" },
+          "signature": { "type": "string" },
+          "docstring": { "type": "string" },
+          "is_async": { "type": "boolean" },
+          "is_public": { "type": "boolean" },
+          "file_path": { "type": "string" },
+          "start_line": { "type": "integer" },
+          "end_line": { "type": "integer" },
+          "score": { "type": "number" },
+          "call_site_count": { "type": "integer" }
+        }
+      }
+    }
+  }
+}

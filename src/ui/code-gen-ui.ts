@@ -1,245 +1,57 @@
-import { t } from "./theme.js";
+/**
+ * CodeGenerationUI — the "⚡ Pro Tip" animated box shown during generation.
+ *
+ * Two visual layers:
+ *   1. Orbital spinner status line: `  ╭╯  Generating MCP server   1m 3s`
+ *   2. Rounded box with rotating typewriter tips + shimmer accent on the title
+ *
+ * Reduced-motion / non-TTY: renders as a plain static tip line, no animation.
+ * Uses only theme colors — no raw 256-color ANSI outside the theme.
+ */
 
-// ---------------------------------------------------------------------------
-// ANSI escape codes
-// ---------------------------------------------------------------------------
-
-const RESET = "\x1b[0m";
-const BOLD = "\x1b[1m";
-const RED = "\x1b[91m";
-const WHITE = "\x1b[97m";
-
-const SUNSET_BORDER = "\x1b[38;5;94m";
-const SUNSET_TITLE = "\x1b[38;5;214m";
-const SUNSET_CONTENT = "\x1b[38;5;230m";
+import { t, fmtDuration, stripAnsi, displayWidth } from "./theme.js";
+import { ORBITAL_FRAMES, BOX, SPARK } from "./icons.js";
 
 const HIDE_CURSOR = "\x1b[?25l";
 const SHOW_CURSOR = "\x1b[?25h";
 const CLEAR_LINE = "\x1b[K";
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
-
-const BOX_WIDTH_MAX = 100;
+const FRAME_INTERVAL_MS = 50; // 20fps — intentional, not frantic
+const TIP_TYPEWRITER_MS = 30;
+const TIP_PAUSE_MS = 4000;
 const BOX_WIDTH_MIN = 50;
-const FRAME_INTERVAL_MS = 40;
-const TIP_PAUSE_TICKS = 50; // ~2 seconds at 40ms per tick
+const BOX_WIDTH_MAX = 80;
 
+// Synapse-specific tips — different from Python's generic MCP marketing copy.
+// Focused on what a Synapse user actually needs to know.
 const TIPS: readonly string[] = [
-  "Build your MCP server once and it works with any AI app. No need to rebuild the same thing over and over for different platforms.",
-  "One standard connection for everything. Instead of custom cables for each device, MCP gives AI one universal way to plug into your tools.",
-  "Your AI doesn't load every tool upfront. It grabs only what it needs, exactly when needed—saves money and runs faster.",
-  "Python, JavaScript, Go, Rust—use whatever language your team already knows. MCP works with all of them.",
-  "MCP servers keep your sensitive data behind your firewall. You control who sees what, with built-in security and permissions.",
-  "When you add new features, your AI knows immediately. No restarts or manual updates needed—it just works.",
-  "What used to take weeks now takes hours. Companies report finishing projects 40-70% faster with MCP servers.",
-  "Switch between any AI client without rebuilding. Your server works with all of them—you're never locked in.",
-  "Best servers do one thing really well. A weather server does weather. A database server does databases. Simple beats complicated.",
-  "Package your server once in Docker, run it anywhere—Mac, Windows, cloud. No more setup headaches.",
-  "16,000+ ready-to-use servers for Gmail, Slack, GitHub, Google Drive, and more. Don't rebuild what's already there.",
-  "28% of Fortune 500 companies now use MCP servers. In finance, it's 45%. This isn't experimental—it's becoming the standard.",
-  "Your AI keeps context across conversations. It remembers your projects, preferences, and history—like talking to someone who actually knows you.",
-  "MCP makes AI respond 40-60% faster by cutting out unnecessary steps. Your users notice the speed difference.",
-  "Building MCP servers is the fastest way for enterprises to adopt AI and still leverage their existing software assets",
+  "Every function you expose becomes a tool your AI can call. Keep them small and focused for best results.",
+  "Give your functions clear docstrings — the AI reads them to decide when to invoke each tool.",
+  "Typed parameters (str, int, dict) help the AI generate correct arguments. Avoid `Any` when you can.",
+  "Return dicts or Pydantic models instead of complex objects — MCP needs JSON-serializable output.",
+  "Secrets and API keys should live in environment variables, not function defaults. Synapse handles this for you.",
+  "Group related functions into a single MCP server. Small, cohesive servers work better than sprawling ones.",
+  "Add validation at the start of each tool — reject bad inputs with clear error messages the AI can learn from.",
+  "The best tools do one thing well. If a function does two things, consider splitting it.",
+  "Async functions handle I/O concurrently. Use them for network calls, database queries, and file operations.",
+  "Test your MCP server locally with `python mcp_server.py` before adding it to your AI client.",
 ];
-
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
-function formatElapsed(seconds: number): string {
-  const mins = Math.floor(seconds / 60);
-  const secs = Math.floor(seconds % 60);
-  if (mins > 0) {
-    return `${mins}m ${secs}s`;
-  }
-  return `${secs}s`;
-}
-
-function displayWidth(text: string): number {
-  let width = 0;
-  for (const char of text) {
-    const code = char.codePointAt(0) ?? 0;
-    if (code >= 0x1f300 || code >= 0x2600) {
-      width += 2;
-    } else {
-      width += 1;
-    }
-  }
-  return width;
-}
-
-function wrapText(text: string, maxWidth: number): string[] {
-  const words = text.split(" ");
-  const lines: string[] = [];
-  let currentLine = "";
-  let currentWidth = 0;
-
-  for (const word of words) {
-    const wordWidth = displayWidth(word);
-    if (!currentLine) {
-      currentLine = word;
-      currentWidth = wordWidth;
-    } else if (currentWidth + 1 + wordWidth <= maxWidth) {
-      currentLine += " " + word;
-      currentWidth += 1 + wordWidth;
-    } else {
-      lines.push(currentLine);
-      currentLine = word;
-      currentWidth = wordWidth;
-    }
-  }
-  if (currentLine) {
-    lines.push(currentLine);
-  }
-  return lines;
-}
-
-function getOrbitalFrame(frameIdx: number): string {
-  const frames = [
-    `${WHITE}╭${RED}╯${RESET}`,
-    `${WHITE}╮${RED}╰${RESET}`,
-    `${WHITE}╯${RED}╭${RESET}`,
-    `${WHITE}╰${RED}╮${RESET}`,
-  ];
-  return frames[frameIdx % frames.length];
-}
-
-// ---------------------------------------------------------------------------
-// CodeGenerationUI
-// ---------------------------------------------------------------------------
 
 export class CodeGenerationUI {
   private intervalId: ReturnType<typeof setInterval> | null = null;
-  private currentTipIndex = 0;
-  private currentTipCharIndex = 0;
-  private tipDisplayComplete = false;
-  private tipPauseCounter = 0;
-  private totalLines = 0;
-  private startTime: number | null = null;
+  private tipIndex = 0;
+  private tipCharIndex = 0;
+  private tipComplete = false;
+  private tipPauseUntil = 0;
+  private lastCharAdvance = 0;
+  private startTime = 0;
   private orbitalFrame = 0;
+  private totalRenderedLines = 0;
   private boxWidth: number;
 
   constructor() {
     const cols = process.stdout.columns || 80;
-    this.boxWidth = Math.min(BOX_WIDTH_MAX, Math.max(BOX_WIDTH_MIN, cols - 2));
-  }
-
-  // -------------------------------------------------------------------------
-  // Box rendering
-  // -------------------------------------------------------------------------
-
-  private renderBox(tipText: string): string[] {
-    const lines: string[] = [];
-    const innerWidth = this.boxWidth - 2;
-    const tipLeftPadding = 3;
-    const maxTipWidth = innerWidth - tipLeftPadding * 2;
-
-    // Top border
-    lines.push(`${SUNSET_BORDER}╔${"═".repeat(innerWidth)}╗${RESET}`);
-
-    // Empty line
-    lines.push(
-      `${SUNSET_BORDER}║${RESET}${" ".repeat(innerWidth)}${SUNSET_BORDER}║${RESET}`,
-    );
-
-    // Title line
-    const titleText = `${BOLD}${SUNSET_TITLE}⚡ PRO TIP${RESET}`;
-    const titlePlain = "⚡ PRO TIP";
-    const titleWidth = displayWidth(titlePlain);
-    const leftPad = Math.floor((innerWidth - titleWidth) / 2);
-    const rightPad = innerWidth - leftPad - titleWidth;
-    lines.push(
-      `${SUNSET_BORDER}║${RESET}${" ".repeat(leftPad)}${titleText}${" ".repeat(rightPad)}${SUNSET_BORDER}║${RESET}`,
-    );
-
-    // Empty line after title
-    lines.push(
-      `${SUNSET_BORDER}║${RESET}${" ".repeat(innerWidth)}${SUNSET_BORDER}║${RESET}`,
-    );
-
-    // Tip text lines (max 2 wrapped lines)
-    const wrappedLines = wrapText(tipText, maxTipWidth);
-    while (wrappedLines.length < 2) {
-      wrappedLines.push("");
-    }
-
-    for (const wrappedLine of wrappedLines.slice(0, 2)) {
-      const tipDisplayWidth = displayWidth(wrappedLine);
-      const tipRightPadding = Math.max(
-        0,
-        innerWidth - tipLeftPadding - tipDisplayWidth,
-      );
-      lines.push(
-        `${SUNSET_BORDER}║${RESET}${" ".repeat(tipLeftPadding)}${SUNSET_CONTENT}${wrappedLine}${RESET}${" ".repeat(tipRightPadding)}${SUNSET_BORDER}║${RESET}`,
-      );
-    }
-
-    // Empty line before bottom
-    lines.push(
-      `${SUNSET_BORDER}║${RESET}${" ".repeat(innerWidth)}${SUNSET_BORDER}║${RESET}`,
-    );
-
-    // Bottom border
-    lines.push(`${SUNSET_BORDER}╚${"═".repeat(innerWidth)}╝${RESET}`);
-
-    return lines;
-  }
-
-  // -------------------------------------------------------------------------
-  // Animation tick
-  // -------------------------------------------------------------------------
-
-  private tick(): void {
-    const tipIdx = this.currentTipIndex;
-    const charIdx = this.currentTipCharIndex;
-    const currentTip = TIPS[tipIdx % TIPS.length];
-    const visibleTip = currentTip.slice(0, charIdx);
-
-    const orbital = getOrbitalFrame(this.orbitalFrame);
-
-    let elapsedStr = "";
-    if (this.startTime !== null) {
-      elapsedStr = "  " + formatElapsed((Date.now() - this.startTime) / 1000);
-    }
-
-    const statusLine = `  ${orbital} Generating MCP server${elapsedStr}`;
-    const boxLines = this.renderBox(visibleTip);
-
-    // Move cursor up to overwrite previous output
-    if (this.totalLines > 0) {
-      process.stdout.write(`\x1b[${this.totalLines}A`);
-    }
-
-    // Write status line
-    process.stdout.write(`\r${CLEAR_LINE}${statusLine}\n`);
-
-    // Write box lines
-    for (const line of boxLines) {
-      process.stdout.write(`\r${CLEAR_LINE}${line}\n`);
-    }
-
-    this.totalLines = 1 + boxLines.length;
-    this.orbitalFrame++;
-
-    // Typewriter logic
-    if (!this.tipDisplayComplete) {
-      if (this.currentTipCharIndex < currentTip.length) {
-        this.currentTipCharIndex++;
-      } else {
-        this.tipDisplayComplete = true;
-        this.tipPauseCounter = 0;
-      }
-    } else {
-      this.tipPauseCounter++;
-      if (this.tipPauseCounter > TIP_PAUSE_TICKS) {
-        this.currentTipIndex = (this.currentTipIndex + 1) % TIPS.length;
-        this.currentTipCharIndex = 0;
-        this.tipDisplayComplete = false;
-        this.tipPauseCounter = 0;
-      }
-    }
+    this.boxWidth = Math.min(BOX_WIDTH_MAX, Math.max(BOX_WIDTH_MIN, cols - 6));
   }
 
   // -------------------------------------------------------------------------
@@ -247,23 +59,24 @@ export class CodeGenerationUI {
   // -------------------------------------------------------------------------
 
   start(startTime?: number): void {
+    this.startTime = startTime ?? Date.now();
+    this.tipIndex = Math.floor(Math.random() * TIPS.length);
+    this.tipCharIndex = 0;
+    this.tipComplete = false;
+    this.lastCharAdvance = Date.now();
+
+    if (t.env.noAnimation) {
+      // Static rendering — one shot, no animation
+      this.renderStatic();
+      return;
+    }
+
     process.stdout.write(HIDE_CURSOR);
 
-    this.currentTipIndex = 0;
-    this.currentTipCharIndex = 0;
-    this.tipDisplayComplete = false;
-    this.tipPauseCounter = 0;
-    this.totalLines = 0;
-    this.orbitalFrame = 0;
-    this.startTime = startTime ?? Date.now();
-
-    // Initial blank lines so the first tick can overwrite them
-    process.stdout.write("\n"); // status line placeholder
-    const boxLines = this.renderBox("");
-    for (const _ of boxLines) {
-      process.stdout.write("\n");
-    }
-    this.totalLines = 1 + boxLines.length;
+    // Reserve vertical space by printing blank lines equal to what tick renders
+    const initialLines = this.renderFrame(TIPS[this.tipIndex]);
+    for (const line of initialLines) process.stdout.write(line + "\n");
+    this.totalRenderedLines = initialLines.length;
 
     this.intervalId = setInterval(() => this.tick(), FRAME_INTERVAL_MS);
   }
@@ -273,26 +86,155 @@ export class CodeGenerationUI {
       clearInterval(this.intervalId);
       this.intervalId = null;
     }
-    process.stdout.write(SHOW_CURSOR);
+    if (!t.env.noAnimation) process.stdout.write(SHOW_CURSOR);
   }
 
   complete(): void {
     this.stop();
-
     // Clear the animation area
-    if (this.totalLines > 0) {
-      process.stdout.write(`\x1b[${this.totalLines}A`);
-      for (let i = 0; i < this.totalLines; i++) {
+    if (!t.env.noAnimation && this.totalRenderedLines > 0) {
+      process.stdout.write(`\x1b[${this.totalRenderedLines}A`);
+      for (let i = 0; i < this.totalRenderedLines; i++) {
         process.stdout.write(`\r${CLEAR_LINE}\n`);
       }
-      process.stdout.write(`\x1b[${this.totalLines}A`);
+      process.stdout.write(`\x1b[${this.totalRenderedLines}A`);
+    }
+    const elapsed = fmtDuration(Date.now() - this.startTime);
+    console.log(`  ${t.ok("✓")}  ${t.text("Generation complete")}  ${t.dim(elapsed)}`);
+  }
+
+  // -------------------------------------------------------------------------
+  // Animation frame
+  // -------------------------------------------------------------------------
+
+  private tick(): void {
+    const now = Date.now();
+    const currentTip = TIPS[this.tipIndex % TIPS.length];
+
+    // Advance the typewriter
+    if (!this.tipComplete) {
+      if (now - this.lastCharAdvance >= TIP_TYPEWRITER_MS) {
+        this.tipCharIndex = Math.min(this.tipCharIndex + 1, currentTip.length);
+        this.lastCharAdvance = now;
+        if (this.tipCharIndex >= currentTip.length) {
+          this.tipComplete = true;
+          this.tipPauseUntil = now + TIP_PAUSE_MS;
+        }
+      }
+    } else if (now >= this.tipPauseUntil) {
+      this.tipIndex = (this.tipIndex + 1) % TIPS.length;
+      this.tipCharIndex = 0;
+      this.tipComplete = false;
+      this.lastCharAdvance = now;
     }
 
-    // Print completion message using theme
-    let elapsedStr = "";
-    if (this.startTime !== null) {
-      elapsedStr = "  " + formatElapsed((Date.now() - this.startTime) / 1000);
+    this.orbitalFrame = (this.orbitalFrame + 1) % ORBITAL_FRAMES.length;
+
+    const visibleTip = currentTip.slice(0, this.tipCharIndex);
+    const lines = this.renderFrame(visibleTip);
+
+    // Repaint in place
+    if (this.totalRenderedLines > 0) {
+      process.stdout.write(`\x1b[${this.totalRenderedLines}A`);
     }
-    console.log(`  ${t.ok("✓")}  Generation complete${elapsedStr}`);
+    for (const line of lines) {
+      process.stdout.write(`\r${CLEAR_LINE}${line}\n`);
+    }
+    this.totalRenderedLines = lines.length;
   }
+
+  // -------------------------------------------------------------------------
+  // Frame composition
+  // -------------------------------------------------------------------------
+
+  private renderFrame(tipVisibleText: string): string[] {
+    const lines: string[] = [];
+
+    // Status line
+    const frame = ORBITAL_FRAMES[this.orbitalFrame % ORBITAL_FRAMES.length];
+    const orbital = t.text(frame.charAt(0)) + t.brand(frame.charAt(1));
+    const elapsed = fmtDuration(Date.now() - this.startTime);
+    lines.push(
+      `  ${orbital}  ${t.text("Generating MCP server")}  ${t.dim(elapsed)}`,
+    );
+    lines.push(""); // blank spacer
+
+    // Box
+    const innerWidth = this.boxWidth;
+    const innerPad = 2;
+    const contentWidth = innerWidth - innerPad * 2;
+
+    // Top border
+    lines.push(
+      `  ${t.accent(BOX.tl + BOX.h.repeat(innerWidth) + BOX.tr)}`,
+    );
+
+    // Title row (⚡  Pro Tip) — accent shimmer color for warmth
+    const titleText = `${SPARK}  ${t.accentBold("Pro Tip")}`;
+    const titleWidth = displayWidth(stripAnsi(titleText));
+    const titleRightPad = Math.max(0, innerWidth - innerPad - titleWidth);
+    lines.push(
+      `  ${t.accent(BOX.v)}${" ".repeat(innerPad)}${t.accentShim(SPARK)}  ${t.accentBold("Pro Tip")}${" ".repeat(titleRightPad)}${t.accent(BOX.v)}`,
+    );
+
+    // Blank line
+    lines.push(
+      `  ${t.accent(BOX.v)}${" ".repeat(innerWidth)}${t.accent(BOX.v)}`,
+    );
+
+    // Tip content — wrap to fit
+    const wrapped = wrapText(tipVisibleText, contentWidth);
+    // Ensure exactly 3 body lines for a stable footprint
+    while (wrapped.length < 3) wrapped.push("");
+    for (const wrappedLine of wrapped.slice(0, 3)) {
+      const w = displayWidth(wrappedLine);
+      const rightPad = Math.max(0, innerWidth - innerPad - w);
+      lines.push(
+        `  ${t.accent(BOX.v)}${" ".repeat(innerPad)}${t.warm(wrappedLine)}${" ".repeat(rightPad)}${t.accent(BOX.v)}`,
+      );
+    }
+
+    // Blank line
+    lines.push(
+      `  ${t.accent(BOX.v)}${" ".repeat(innerWidth)}${t.accent(BOX.v)}`,
+    );
+
+    // Bottom border
+    lines.push(
+      `  ${t.accent(BOX.bl + BOX.h.repeat(innerWidth) + BOX.br)}`,
+    );
+
+    return lines;
+  }
+
+  private renderStatic(): void {
+    // Single-shot render for non-animated environments
+    const currentTip = TIPS[this.tipIndex];
+    console.log(`  ${t.text("Generating MCP server…")}`);
+    console.log();
+    console.log(`  ${t.accentShim(SPARK)}  ${t.accentBold("Pro Tip:")} ${t.warm(currentTip)}`);
+    console.log();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function wrapText(text: string, maxWidth: number): string[] {
+  if (!text) return [];
+  const words = text.split(/\s+/);
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word;
+    if (displayWidth(candidate) > maxWidth && current) {
+      lines.push(current);
+      current = word;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
 }

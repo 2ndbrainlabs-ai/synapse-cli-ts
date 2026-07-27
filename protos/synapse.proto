@@ -10,11 +10,15 @@ service SynapseService {
   // Analyze codebase - bidirectional stream for AI-powered analysis
   rpc Analyze(stream AnalyzeMessage) returns (stream AnalyzeMessage);
 
-  // Detect MCP tool candidates - unary RPC, CLI sends all functions, backend AI classifies
-  rpc DetectEndpoints(DetectRequest) returns (DetectResponse);
+  // Discover MCP tool candidates - server-streaming, backend classifies functions in batches
+  rpc DetectEndpoints(DetectRequest) returns (stream DetectBatchResponse);
 
   // Track CLI event (init, first_auth) - unary, fire-and-forget telemetry
   rpc TrackEvent(TrackEventRequest) returns (TrackEventResponse);
+
+  // Note: DiscoverUseCases RPC was removed in v0.2. Discovery now runs over the
+  // Build stream (bidirectional) so agent tool calls to the CLI work end-to-end.
+  // DiscoverRequest / DiscoverResponse message shapes retained below for CLI compat.
 }
 
 // ============================================================================
@@ -30,7 +34,63 @@ message BuildMessage {
     ToolCallRequest tool_request = 4;
     BuildResult build_result = 5;
     ErrorMessage error = 6;
+    // v2 Custom track: CLI sends the extracted SurfaceManifest + intent;
+    // backend synthesizes a single MCP tool file and returns it.
+    CustomToolRequest custom_tool_request = 7;
+    CustomToolResult  custom_tool_result  = 8;
+    // v2 Custom-mode discovery: parallel Haiku classifier fan-out.
+    ClassifyCandidatesRequest classify_request = 9;
+    ClassifyCandidatesResult  classify_result  = 10;
   }
+}
+
+// ============================================================================
+// V2 CUSTOM-MODE DISCOVERY MESSAGES
+// ============================================================================
+
+// CLI → backend: score top-K candidate functions and cluster them into
+// band+shape+hints so the CLI can present a workflow picker to the user.
+message ClassifyCandidatesRequest {
+  string request_id    = 1;   // Session id echoed in Langfuse traces.
+  string manifest_json = 2;   // SurfaceManifest JSON — top-K RankedFunction list.
+  int32  shard_size    = 3;   // Functions per Haiku shard (default 12).
+  int32  max_shards    = 4;   // Hard cap on Haiku calls (default 20).
+}
+
+// Backend → CLI: per-function verdicts + counters.
+message ClassifyCandidatesResult {
+  bool   success        = 1;
+  string verdicts_json  = 2;   // JSON list of FunctionVerdict objects.
+  int32  shards_run     = 3;
+  int32  cached_hits    = 4;   // Firestore SHA cache reuse count.
+  int32  budget_dropped = 5;   // Functions dropped due to max_shards cap.
+  string error          = 6;
+}
+
+// ============================================================================
+// V2 CUSTOM TRACK MESSAGES
+// ============================================================================
+
+// CLI → backend: request synthesis of a single MCP tool from N internal
+// functions selected out of the extracted SurfaceManifest.
+message CustomToolRequest {
+  string request_id      = 1;   // Session id (echoed in traces).
+  string language        = 2;   // "python" (M1), later ts/java/csharp/go/rust.
+  string manifest_json   = 3;   // Full SurfaceManifest as JSON.
+  string intent          = 4;   // User's natural-language description of the workflow.
+  repeated string selected_qualnames = 5; // Optional: "module.qualname" list.
+  string suggested_tool_name = 6;         // Optional: user-provided tool name hint.
+}
+
+// Backend → CLI: rendered MCP server file text + smoke-verify report.
+message CustomToolResult {
+  bool   success        = 1;
+  string tool_name      = 2;    // snake_case name used for the file + @mcp.tool.
+  string file_extension = 3;    // e.g. "py", "ts" — CLI picks the destination path.
+  string file_source    = 4;    // Full rendered file content.
+  repeated string env_vars = 5; // Env vars the composed body reads.
+  string report_json    = 6;    // JSON of {verify_ok, verify_tool, rounds, errors}.
+  string error          = 7;    // Non-empty on failure.
 }
 
 // Initial request from CLI to start build workflow
@@ -212,10 +272,48 @@ message DetectedEndpoint {
   int32 line_number = 11;               // Line number (echoed from FunctionInfo)
 }
 
-// Response: backend returns AI-classified candidates sorted by confidence
+// Response: backend returns AI-classified candidates sorted by confidence (legacy, kept for compat)
 message DetectResponse {
-  repeated DetectedEndpoint candidates = 1;  // Top candidates (confidence >= 0.4)
-  string error = 2;                          // Error message if detection failed
+  repeated DetectedEndpoint candidates = 1;
+  string error = 2;
+}
+
+// Streamed batch response: one per classified batch
+message DetectBatchResponse {
+  repeated DetectedEndpoint candidates = 1;  // Candidates from this batch
+  int32 batch_number = 2;                    // Which batch (1-indexed)
+  int32 total_batches = 3;                   // Total batches to process
+  int32 functions_classified = 4;            // Cumulative functions classified so far
+  int32 total_functions = 5;                 // Total functions being classified
+  bool is_final = 6;                         // True on last batch
+  string error = 7;                          // Error if this batch failed
+}
+
+// ============================================================================
+// USE CASE DISCOVERY MESSAGES
+// ============================================================================
+
+// Request: CLI sends project schema for agent-based exploration
+message DiscoverRequest {
+  string project_schema = 1;          // Content of project_schema.txt
+  string working_dir = 2;             // Project working directory
+}
+
+// A discovered use case (group of related functions)
+message UseCase {
+  string title = 1;                   // Short title (2-4 words)
+  string description = 2;            // One sentence describing the capability
+  repeated string functions = 3;     // Function names in this use case
+  string module = 4;                 // Primary module these come from
+}
+
+// Streamed response: progress updates + final use cases
+message DiscoverResponse {
+  repeated UseCase use_cases = 1;    // Use cases found so far (cumulative on final)
+  int32 tool_calls_made = 2;         // How many exploration tool calls made
+  bool is_final = 3;                 // True on last message
+  string status = 4;                 // "exploring" | "complete" | "error"
+  string message = 5;               // Human-readable status
 }
 
 // ============================================================================

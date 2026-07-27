@@ -44,7 +44,7 @@ function loadRootConfig(): RootConfig {
   if (_rootConfig) return _rootConfig;
   try {
     const __dirname = path.dirname(fileURLToPath(import.meta.url));
-    const configPath = path.resolve(__dirname, "../../config.json");
+    const configPath = path.resolve(__dirname, "../config.json");
     _rootConfig = JSON.parse(fs.readFileSync(configPath, "utf-8"));
   } catch {
     _rootConfig = {};
@@ -202,7 +202,15 @@ export function getApiKeyDisplay(workingDir?: string): [string, string] {
 
 // --- Backend config ---
 
+export function isDevMode(): boolean {
+  return process.env.SYNAPSE_DEV === "1" || process.argv.includes("--dev");
+}
+
 export function getBackendConfig(): BackendConfig {
+  if (isDevMode()) {
+    return { url: null, host: "localhost", port: "50051" };
+  }
+
   const envUrl = (process.env.SYNAPSE_BACKEND_URL ?? "").trim();
   if (envUrl) {
     return { url: envUrl, host: null, port: null };

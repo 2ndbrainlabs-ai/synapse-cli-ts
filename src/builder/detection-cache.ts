@@ -27,6 +27,7 @@ export async function detectWithCache(
   workingDir: string,
   projectSchema: string,
   cachePath: string,
+  onBatch?: (info: { candidates: number; classified: number; total: number }) => void,
 ): Promise<[Record<string, unknown>[], number]> {
   // Group functions by file
   const funcsByFile = new Map<string, FunctionInfo[]>();
@@ -103,12 +104,14 @@ export async function detectWithCache(
     const client = new SynapseClient({
       url: backend.url ?? undefined,
       host: backend.host ?? undefined,
+      port: backend.port ? parseInt(backend.port, 10) : undefined,
       workingDir,
     });
     const result: DetectResult = await client.detect(
       functionsToSend as unknown as Record<string, unknown>[],
       workingDir,
       projectSchema,
+      onBatch,
     );
     if (result.error) throw new Error(result.error);
     newCandidates = result.candidates as unknown as Record<string, unknown>[];

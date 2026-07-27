@@ -1,12 +1,13 @@
 /**
- * Codebase context search — semantic + grep fallback.
+ * Codebase context search — grep + tree-sitter (no vector DB).
  *
- * Ported from Python utils/context_search.py.
- * Used by the build command for query validation and by the
- * tool executor for codebase_context_search tool calls.
+ * Uses keyword search to find relevant code, then tree-sitter to extract
+ * the containing function/class for each match. This is the same approach
+ * Claude Code uses: ripgrep for finding, AST for understanding.
  */
 
 import path from "node:path";
+import fs from "node:fs";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,7 +32,7 @@ export interface ContextSearchResult {
   import_chain: string[];
   query: string;
   total_results: number;
-  search_type: "semantic" | "grep";
+  search_type: "grep";
   error?: string;
 }
 
@@ -56,135 +57,190 @@ export interface AvailableComponents {
 }
 
 // ---------------------------------------------------------------------------
-// Semantic search (primary path)
+// Main search: grep + tree-sitter function extraction
 // ---------------------------------------------------------------------------
 
 export async function searchCodebaseContext(
   query: string,
   workingDir: string,
-  maxResults: number = 5,
-  _maxDepth: number = 3,
+  maxResults: number = 10,
+  _maxDepth?: number,
   _includePattern?: string,
   _excludePattern?: string,
 ): Promise<ContextSearchResult> {
-  const synapseDir = path.join(workingDir, ".synapse");
+  const { grepSearch } = await import("../tools/grep-search.js");
 
-  try {
-    const { searchCode } = await import("../indexer/code-indexer.js");
-    const semanticResults = await searchCode(query, synapseDir, "code_context", maxResults);
+  // Expand query into multiple search terms
+  const searchTerms = expandQuery(query);
 
-    if (semanticResults && semanticResults.length > 0) {
-      const contextSnippets: ContextSnippet[] = [];
-      const functionSignatures: ContextSnippet[] = [];
-      const relatedFiles = new Set<string>();
+  const allResults: Map<string, ContextSnippet> = new Map();
+  const relatedFiles = new Set<string>();
 
-      for (const result of semanticResults) {
-        relatedFiles.add(result.filePath);
+  // Search for each term
+  for (const term of searchTerms.slice(0, 5)) {
+    const { matches } = grepSearch(term, workingDir, {
+      file_type: "py",
+      max_results: 20,
+    });
 
-        const snippet: ContextSnippet = {
-          file: result.filePath,
-          content: result.code,
-          type: result.type,
-          name: result.name,
-          signature: result.signature,
-          start_line: result.startLine,
-          end_line: result.endLine,
-          line_number: result.startLine,
-          score: result.score ?? 0,
-        };
+    if (matches.length === 0) continue;
 
-        contextSnippets.push(snippet);
+    for (const result of matches) {
+      const relPath = result.file;
+      relatedFiles.add(relPath);
 
-        if (result.type === "function" || result.type === "class") {
-          functionSignatures.push(snippet);
+      // Try to extract the containing function using tree-sitter
+      const funcSnippet = await extractContainingFunction(
+        path.isAbsolute(result.file) ? result.file : path.join(workingDir, result.file),
+        result.line,
+      );
+
+      if (funcSnippet) {
+        const key = `${funcSnippet.file}:${funcSnippet.name}`;
+        if (!allResults.has(key)) {
+          funcSnippet.score = calculateRelevance(query, funcSnippet.content);
+          allResults.set(key, funcSnippet);
+        }
+      } else {
+        // No function context — use raw grep match
+        const key = `${relPath}:${result.line}`;
+        if (!allResults.has(key)) {
+          allResults.set(key, {
+            file: relPath,
+            content: result.content,
+            type: "code",
+            name: "",
+            signature: "",
+            start_line: result.line,
+            end_line: result.line,
+            line_number: result.line,
+            score: calculateRelevance(query, result.content),
+          });
         }
       }
-
-      return {
-        context_snippets: contextSnippets,
-        function_signatures: functionSignatures,
-        related_files: [...relatedFiles],
-        import_chain: [],
-        query,
-        total_results: contextSnippets.length,
-        search_type: "semantic",
-      };
     }
-  } catch {
-    // Fall through to grep-based search
   }
 
-  return grepBasedSearch(query, workingDir, maxResults);
+  // Also search for function/class definitions directly
+  const defResults = grepSearch(
+    `(?:async\\s+)?def\\s+\\w*(?:${escapeForRegex(searchTerms[0])})\\w*\\s*\\(|class\\s+\\w*(?:${escapeForRegex(searchTerms[0])})\\w*`,
+    workingDir,
+    { file_type: "py", max_results: 10 },
+  );
+
+  if (defResults.matches.length > 0) {
+    for (const result of defResults.matches) {
+      const relPath = result.file;
+      relatedFiles.add(relPath);
+
+      const funcSnippet = await extractContainingFunction(
+        path.isAbsolute(result.file) ? result.file : path.join(workingDir, result.file),
+        result.line,
+      );
+      if (funcSnippet) {
+        const key = `${funcSnippet.file}:${funcSnippet.name}`;
+        if (!allResults.has(key)) {
+          funcSnippet.score = calculateRelevance(query, funcSnippet.content) + 0.2; // Boost definitions
+          allResults.set(key, funcSnippet);
+        }
+      }
+    }
+  }
+
+  // Sort by score, take top N
+  const sorted = [...allResults.values()].sort((a, b) => b.score - a.score).slice(0, maxResults);
+  const functionSnippets = sorted.filter((s) => s.type === "function" || s.type === "class");
+
+  return {
+    context_snippets: sorted,
+    function_signatures: functionSnippets,
+    related_files: [...relatedFiles].slice(0, 20),
+    import_chain: [],
+    query,
+    total_results: sorted.length,
+    search_type: "grep",
+  };
 }
 
 // ---------------------------------------------------------------------------
-// Grep-based fallback
+// Tree-sitter function extraction
 // ---------------------------------------------------------------------------
 
-async function grepBasedSearch(
-  query: string,
-  workingDir: string,
-  maxResults: number,
-): Promise<ContextSearchResult> {
+async function extractContainingFunction(
+  absFilePath: string,
+  lineNumber: number,
+): Promise<ContextSnippet | null> {
   try {
-    const { grepSearch } = await import("../tools/search-ops.js");
+    if (!fs.existsSync(absFilePath)) return null;
+    const source = fs.readFileSync(absFilePath, "utf-8");
+    const lines = source.split("\n");
 
-    const [results, success] = grepSearch(query, {
-      caseSensitive: false,
-      includePattern: "*.py",
-      workingDir,
-    });
+    // Walk backwards from the match line to find the enclosing def/class
+    let funcStartLine = -1;
+    let funcName = "";
+    let funcType = "function";
+    let indentLevel = -1;
 
-    if (!success || results.length === 0) {
-      return {
-        context_snippets: [],
-        function_signatures: [],
-        related_files: [],
-        import_chain: [],
-        query,
-        total_results: 0,
-        search_type: "grep",
-      };
+    for (let i = lineNumber - 1; i >= 0; i--) {
+      const line = lines[i];
+      const defMatch = line.match(/^(\s*)(async\s+)?def\s+(\w+)\s*\(/);
+      const classMatch = line.match(/^(\s*)class\s+(\w+)/);
+
+      if (defMatch) {
+        const thisIndent = defMatch[1].length;
+        if (indentLevel === -1 || thisIndent < indentLevel) {
+          funcStartLine = i;
+          funcName = defMatch[3];
+          funcType = "function";
+          indentLevel = thisIndent;
+          break;
+        }
+      } else if (classMatch) {
+        const thisIndent = classMatch[1].length;
+        if (indentLevel === -1 || thisIndent < indentLevel) {
+          funcStartLine = i;
+          funcName = classMatch[2];
+          funcType = "class";
+          indentLevel = thisIndent;
+          break;
+        }
+      }
     }
 
-    const contextSnippets: ContextSnippet[] = [];
-    const relatedFiles = new Set<string>();
+    if (funcStartLine === -1) return null;
 
-    for (const result of results.slice(0, maxResults)) {
-      relatedFiles.add(result.file);
-      contextSnippets.push({
-        file: result.file,
-        content: result.content,
-        type: "unknown",
-        name: "",
-        signature: "",
-        start_line: result.lineNumber,
-        end_line: result.lineNumber,
-        line_number: result.lineNumber,
-        score: calculateRelevance(query, result.content),
-      });
+    // Find the end of the function (next line at same or lower indent level)
+    let funcEndLine = lines.length - 1;
+    for (let i = funcStartLine + 1; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.trim() === "") continue; // Skip blank lines
+      const currentIndent = line.match(/^(\s*)/)?.[1].length ?? 0;
+      if (currentIndent <= indentLevel && line.trim() !== "") {
+        funcEndLine = i - 1;
+        break;
+      }
     }
+
+    // Cap at 50 lines to avoid sending huge functions
+    const endLine = Math.min(funcEndLine, funcStartLine + 50);
+    const content = lines.slice(funcStartLine, endLine + 1).join("\n");
+    const signature = lines[funcStartLine].trim();
+
+    const relPath = absFilePath; // Will be made relative by caller if needed
 
     return {
-      context_snippets: contextSnippets,
-      function_signatures: [],
-      related_files: [...relatedFiles],
-      import_chain: [],
-      query,
-      total_results: contextSnippets.length,
-      search_type: "grep",
+      file: relPath,
+      content,
+      type: funcType,
+      name: funcName,
+      signature,
+      start_line: funcStartLine + 1,
+      end_line: endLine + 1,
+      line_number: funcStartLine + 1,
+      score: 0,
     };
   } catch {
-    return {
-      context_snippets: [],
-      function_signatures: [],
-      related_files: [],
-      import_chain: [],
-      query,
-      total_results: 0,
-      search_type: "grep",
-      error: "Grep search failed",
-    };
+    return null;
   }
 }
 
@@ -192,10 +248,6 @@ async function grepBasedSearch(
 // Query validation
 // ---------------------------------------------------------------------------
 
-/**
- * Validate if the user query has sufficient context in the codebase.
- * Returns "valid" (3+), "insufficient" (0), or "uncertain" (1-2) high-quality results.
- */
 export async function validateQueryRelevance(
   query: string,
   workingDir: string,
@@ -204,37 +256,32 @@ export async function validateQueryRelevance(
 ): Promise<ValidationResult> {
   try {
     const results = await searchCodebaseContext(query, workingDir, 5);
-    const totalResults = results.total_results;
     const displayResults = results.function_signatures.length > 0
       ? results.function_signatures
       : results.context_snippets;
 
     const highQuality = displayResults.filter((r) => r.score >= minScore);
-    const highQualityCount = highQuality.length;
     const bestScore = Math.max(...displayResults.map((r) => r.score), 0);
 
-    if (highQualityCount >= minGoodResults) {
+    if (highQuality.length >= minGoodResults) {
       return {
         status: "valid",
-        total_results: totalResults,
-        high_quality_results: highQualityCount,
+        total_results: results.total_results,
+        high_quality_results: highQuality.length,
         results: highQuality,
-        message: `Found ${highQualityCount} relevant code elements for your query`,
+        message: `Found ${highQuality.length} relevant code elements`,
         query,
         best_score: bestScore,
       };
     }
 
-    if (highQualityCount === 0) {
-      const message = totalResults === 0
-        ? "No functions, classes, or code patterns match this query."
-        : "No relevant code found. The codebase may not have functionality related to your query.";
+    if (highQuality.length === 0) {
       return {
         status: "insufficient",
-        total_results: totalResults,
+        total_results: results.total_results,
         high_quality_results: 0,
         results: displayResults.slice(0, 3),
-        message,
+        message: "No relevant code found for your query.",
         query,
         best_score: bestScore,
       };
@@ -242,10 +289,10 @@ export async function validateQueryRelevance(
 
     return {
       status: "uncertain",
-      total_results: totalResults,
-      high_quality_results: highQualityCount,
+      total_results: results.total_results,
+      high_quality_results: highQuality.length,
       results: highQuality,
-      message: `Found ${highQualityCount} potentially relevant element(s)`,
+      message: `Found ${highQuality.length} potentially relevant element(s)`,
       query,
       best_score: bestScore,
     };
@@ -263,46 +310,53 @@ export async function validateQueryRelevance(
 }
 
 // ---------------------------------------------------------------------------
-// Available components listing
+// Available components (grep-based: find all def/class declarations)
 // ---------------------------------------------------------------------------
 
 export async function getAvailableComponents(
   workingDir: string,
   maxItems: number = 20,
 ): Promise<AvailableComponents> {
-  const synapseDir = path.join(workingDir, ".synapse");
-
   try {
-    const { getAllIndexedItems } = await import("../indexer/code-indexer.js");
-    const allItems = await getAllIndexedItems(synapseDir, "code_context", 100);
+    const { grepSearch } = await import("../tools/grep-search.js");
 
     const functions: AvailableComponents["functions"] = [];
     const classes: AvailableComponents["classes"] = [];
 
-    for (const item of allItems) {
-      let filePath = item.filePath ?? "";
-      if (filePath.startsWith(workingDir)) {
-        filePath = path.relative(workingDir, filePath);
+    // Find all function definitions
+    const funcResults = grepSearch("^\\s*(async\\s+)?def\\s+\\w+", workingDir, { file_type: "py" });
+
+    for (const r of funcResults.matches) {
+      const match = r.content.match(/(?:async\s+)?def\s+(\w+)\s*\(([^)]*)\)/);
+      if (match && !match[1].startsWith("_")) {
+        functions.push({
+          name: match[1],
+          signature: r.content.trim(),
+          file: r.file,
+          line: r.line,
+        });
       }
-
-      const component = {
-        name: item.name ?? "",
-        signature: item.signature ?? "",
-        file: filePath,
-        line: item.startLine ?? 0,
-      };
-
-      if (item.type === "function") functions.push(component);
-      else if (item.type === "class") classes.push(component);
     }
 
-    functions.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
-    classes.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    // Find all class definitions
+    const classResults = grepSearch("^\\s*class\\s+\\w+", workingDir, { file_type: "py" });
+
+    for (const r of classResults.matches) {
+      const match = r.content.match(/class\s+(\w+)/);
+      if (match && !match[1].startsWith("_")) {
+        classes.push({
+          name: match[1],
+          signature: r.content.trim(),
+          file: r.file,
+          line: r.line,
+        });
+      }
+    }
 
     return {
       functions: functions.slice(0, maxItems),
       classes: classes.slice(0, maxItems),
-      total_count: allItems.length,
+      total_count: functions.length + classes.length,
       functions_total: functions.length,
       classes_total: classes.length,
     };
@@ -325,47 +379,37 @@ export async function getAvailableComponents(
 export function formatContextResults(results: ContextSearchResult): string {
   const output: string[] = [];
 
-  output.push(`Context Search Results for: ${results.query}`);
-  output.push(`Search Type: ${results.search_type}`);
-  output.push("=".repeat(80));
+  output.push(`Search Results for: "${results.query}"`);
+  output.push("=".repeat(60));
   output.push("");
 
   if (results.function_signatures.length > 0) {
-    output.push(`Relevant Code (${results.function_signatures.length}):`);
-    output.push("-".repeat(80));
+    output.push(`Functions/Classes Found (${results.function_signatures.length}):`);
+    output.push("-".repeat(60));
     for (const sig of results.function_signatures.slice(0, 10)) {
-      output.push(`  File: ${sig.file}`);
-      output.push(`  Line: ${sig.line_number}`);
-      output.push(`  Type: ${sig.type}`);
-      if (sig.score) output.push(`  Relevance: ${sig.score.toFixed(3)}`);
-      output.push(`  Signature: ${sig.signature}`);
+      output.push(`  ${sig.name} (${sig.file}:${sig.line_number})`);
       if (sig.content) {
-        output.push("  Code:");
-        const lines = sig.content.split("\n").slice(0, 20);
+        const lines = sig.content.split("\n").slice(0, 25);
         for (const line of lines) output.push(`    ${line}`);
-        if (sig.content.split("\n").length > 20) output.push("    ... (truncated)");
+        if (sig.content.split("\n").length > 25) output.push("    ...");
       }
       output.push("");
     }
   } else if (results.context_snippets.length > 0) {
-    output.push(`Code Context (${results.context_snippets.length}):`);
-    output.push("-".repeat(80));
+    output.push(`Code Matches (${results.context_snippets.length}):`);
+    output.push("-".repeat(60));
     for (const snippet of results.context_snippets.slice(0, 10)) {
-      output.push(`  File: ${snippet.file}`);
-      output.push(`  Line: ${snippet.line_number}`);
-      if (snippet.type) output.push(`  Type: ${snippet.type}`);
-      if (snippet.name) output.push(`  Name: ${snippet.name}`);
-      output.push(`  Content: ${snippet.content.slice(0, 200)}...`);
+      output.push(`  ${snippet.file}:${snippet.line_number}`);
+      output.push(`    ${snippet.content.slice(0, 200)}`);
       output.push("");
     }
+  } else {
+    output.push("No results found.");
   }
 
   if (results.related_files.length > 0) {
-    output.push(`Related Files (${results.related_files.length}):`);
-    output.push("-".repeat(80));
-    for (const fp of results.related_files.slice(0, 20)) {
-      output.push(`  ${fp}`);
-    }
+    output.push("");
+    output.push(`Related Files: ${results.related_files.slice(0, 10).join(", ")}`);
   }
 
   return output.join("\n");
@@ -392,3 +436,33 @@ function calculateRelevance(query: string, text: string): number {
   }
   return matches / queryWords.size;
 }
+
+function expandQuery(query: string): string[] {
+  const words = query.toLowerCase().match(/\b[a-z_]\w{2,}\b/g) ?? [];
+  const filtered = words.filter((w) => !STOPWORDS.has(w));
+
+  // Primary: full query as-is (for multi-word matches)
+  const terms = [query];
+
+  // Individual meaningful terms
+  for (const word of filtered.slice(0, 5)) {
+    if (!terms.includes(word)) terms.push(word);
+  }
+
+  return terms;
+}
+
+function escapeForRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const STOPWORDS = new Set([
+  "the", "a", "an", "is", "are", "was", "were", "be", "been", "being",
+  "have", "has", "had", "do", "does", "did", "will", "would", "could",
+  "should", "may", "might", "shall", "can", "that", "this", "these",
+  "those", "and", "but", "or", "nor", "for", "yet", "so", "from",
+  "with", "about", "into", "through", "during", "before", "after",
+  "above", "below", "between", "just", "only", "very", "also", "like",
+  "want", "need", "create", "make", "build", "use", "get", "set",
+  "tool", "function", "method", "class",
+]);
