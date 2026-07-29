@@ -53,5 +53,5 @@
     "code-generation",
     "synapse"
   ],
-  "license": "MIT"
+  "license": "Apache-2.0"
 }

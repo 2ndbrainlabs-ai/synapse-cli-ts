@@ -1,22 +1,27 @@
-# Synapse CLI
+<div align="center">
 
-> **Agentic MCP server generator.** Point it at a codebase, describe what you want exposed, and get a working [Model Context Protocol](https://modelcontextprotocol.io) server you can drop into Claude Desktop, Cursor, or any MCP-compatible client.
+<img src="./docs/logo.png" alt="Synapse" width="360" />
 
-[![npm version](https://img.shields.io/npm/v/@2ndbrainlabs-ai/synapse-cli.svg)](https://www.npmjs.com/package/@2ndbrainlabs-ai/synapse-cli)
-[![node](https://img.shields.io/node/v/@2ndbrainlabs-ai/synapse-cli.svg)](https://nodejs.org)
-[![license](https://img.shields.io/npm/l/@2ndbrainlabs-ai/synapse-cli.svg)](./LICENSE)
+### Agentic MCP server generator
+
+Turn any codebase into a production-ready [Model Context Protocol](https://modelcontextprotocol.io) server — from your terminal, in seconds.
+
+[Homepage](https://synaps3.ai) · [Docs](https://synaps3.ai/docs) · [Report an issue](https://github.com/2ndbrainlabs-ai/synapse-cli/issues) · [Discussions](https://github.com/2ndbrainlabs-ai/synapse-cli/discussions)
+
+[![npm version](https://img.shields.io/npm/v/@2ndbrainlabs-ai/synapse-cli.svg?logo=npm&color=D97757)](https://www.npmjs.com/package/@2ndbrainlabs-ai/synapse-cli)
+[![node](https://img.shields.io/node/v/@2ndbrainlabs-ai/synapse-cli.svg?logo=node.js)](https://nodejs.org)
+[![license](https://img.shields.io/badge/License-Apache_2.0-green.svg)](./LICENSE)
+[![downloads](https://img.shields.io/npm/dm/@2ndbrainlabs-ai/synapse-cli.svg?color=blue)](https://www.npmjs.com/package/@2ndbrainlabs-ai/synapse-cli)
+
+</div>
 
 ---
 
-## What it does
+## What is Synapse?
 
-Synapse turns any project into an MCP server without you writing tool schemas, argument marshalling, or boilerplate.
+Synapse is a CLI that reads your codebase and generates a runnable MCP server — the tool schemas, argument marshalling, and boilerplate are all handled for you. Point it at a project, describe what you want exposed, and drop the resulting server into Claude Desktop, Cursor, or any MCP-compatible client.
 
-1. **`synapse init`** — scaffolds `.synapse/` in your repo and links it to your account.
-2. **`synapse analyze`** — walks the source tree, extracts a symbol/schema map, and stores it locally.
-3. **`synapse build`** — an agent explores your code (grep, AST symbol lookup, definition/usage tracing), figures out what makes sense to expose, and generates a runnable Python MCP server file.
-
-The CLI does the exploration client-side (fast, private, no code upload). The **generation** happens on the Synapse backend so model routing, retries, and quota can be centrally managed.
+The CLI does source exploration **client-side** — nothing is uploaded. Generation runs on the Synapse backend so model routing, retries, and quota stay centrally managed.
 
 ## Install
 
@@ -24,110 +29,94 @@ The CLI does the exploration client-side (fast, private, no code upload). The **
 npm install -g @2ndbrainlabs-ai/synapse-cli
 ```
 
-Requires **Node.js 18+**.
-
-Verify:
-```bash
-synapse --version
-```
+Requires **Node.js 18+**. Verify with `synapse --version`.
 
 ## Quick start
 
 ```bash
 cd my-project
-synapse init                    # one-time: paste API key
+synapse init                    # one-time: paste your API key
 synapse analyze                 # scans code, writes .synapse/schema.json
 synapse build                   # discovers use cases, prompts you to pick
 ```
 
-That's it. The generated MCP server lands at `./mcp_server.py`. Copy the printed JSON snippet into your MCP client config and you're done.
+The generated server lands at `./mcp_server.py`. Copy the printed JSON snippet into your MCP client config and you're done.
 
-Prefer to skip discovery and describe it yourself:
+Prefer to describe it yourself:
 
 ```bash
 synapse build --query "Expose user auth and profile lookup as MCP tools"
 ```
+
+## Features
+
+- **Zero boilerplate** — tool schemas, argument validation, and MCP wire format handled for you.
+- **Client-side exploration** — grep, AST symbol lookup, and definition/usage tracing all run on your machine.
+- **First-class Python + TypeScript** — full symbol and navigation support. Go, Java, C#, Rust get grep-based fallback.
+- **Streaming gRPC** — bidirectional session with the agent so you can watch tool calls land in real time.
+- **Deterministic surface extraction** — tree-sitter parsers with a 64KB head-sniff make repeat runs cache-friendly.
+- **Signed API keys** — Ed25519 envelope keys, per-request quota, revocation in under 30 seconds.
 
 ## Commands
 
 | Command | Purpose |
 |---|---|
 | `synapse init [--force]` | Initialize Synapse in the current project. Prompts for API key. |
-| `synapse analyze [-o <dir>] [-v]` | Scan the codebase and build a symbol/schema map. Run once, or after significant code changes. |
-| `synapse build [-q <query>] [-o <file>] [--no-validate] [--no-docs] [-g]` | Generate an MCP server. Without `-q`, discovers candidate use cases and lets you pick. `-g` reuses the last `todo_list.md`. |
-| `synapse config [--update] [--key <k>] [--global]` | View or update config. `--global` writes to `~/.synapse` instead of `./.synapse`. |
+| `synapse analyze [-o <dir>] [-v]` | Scan the codebase and build a symbol/schema map. |
+| `synapse build [-q <query>] [-o <file>] [--no-validate] [--no-docs] [-g]` | Generate an MCP server. Without `-q`, discovers candidate use cases. |
+| `synapse config [--update] [--key <k>] [--global]` | View or update config. |
 | `synapse info` | Show project state and account quota. |
 | `synapse update` | Update the CLI to the latest npm release. |
 | `synapse uninstall` | Remove global config and uninstall. |
 
-Global flag:
-
-- `--dev` — talk to a local backend on `localhost:50051` instead of the hosted one. Handy for backend development.
+Add `--dev` to any command to talk to a local backend on `localhost:50051`.
 
 ## Configuration
 
-Synapse reads config from three places, in order of precedence:
+Config is resolved in this order:
 
 1. Environment variables (`SYNAPSE_API_KEY`, `SYNAPSE_BACKEND_URL`, `SYNAPSE_DEV=1`)
 2. Project-local `./.synapse/config.json`
-3. Global `~/.synapse/config.json` (fallback for `--key --global`)
+3. Global `~/.synapse/config.json`
 
-Get your API key from your Synapse account and store it once with `synapse init` or `synapse config --key <k> --global`.
+## How `build` works
 
-## How build works
-
-`synapse build` streams a bidirectional gRPC session with the backend agent. The agent doesn't have your code — it *asks the CLI* for exactly what it needs:
+`synapse build` opens a bidirectional gRPC stream with the backend agent. The agent never sees your code — it *asks the CLI* for exactly what it needs:
 
 - `read_file`, `find_files`, `grep` — bounded reads over your working directory
-- `list_symbols`, `find_definition`, `find_usages` — AST-aware navigation via tree-sitter
+- `list_symbols`, `find_definition`, `find_usages` — AST navigation via tree-sitter
 - `write_file`, `replace_file`, `insert_file` — final artifact writes
 
-Every tool call is scoped to `process.cwd()`. Nothing gets uploaded; only tool results — which are the specific bytes the agent asked for — flow back over the wire.
-
-When the run finishes you'll see:
-
-```
-╭──────── MCP Server Generated ────────╮
-│ Tools:     4                          │
-│ Resources: 0                          │
-│ Output:    mcp_server.py              │
-│ Session:   sess_erjc8hxg3ka9          │
-╰───────────────────────────────────────╯
-```
-
-Include the `Session:` id when reporting an issue — it maps 1:1 to a backend trace.
+Every tool call is scoped to `process.cwd()`. Only the specific bytes the agent asks for flow back over the wire.
 
 ## Language support
 
-- **Python** — first-class (symbol extraction, use-case discovery, generation)
-- **TypeScript / JavaScript / TSX / JSX / MJS / CJS** — full symbol + navigation support
-- **Go, Java, C#, Rust** — grep + basic symbol patterns; generation quality varies
-
-The agent falls back to grep-only navigation for languages it can't parse, so it still works — just less precisely.
-
-## Environment variables
-
-| Variable | Purpose |
-|---|---|
-| `SYNAPSE_API_KEY` | Overrides the stored API key |
-| `SYNAPSE_BACKEND_URL` | Override backend URL (default: `grpc.synaps3.ai`) |
-| `SYNAPSE_DEV` | Set to `1` for `localhost:50051` (same as `--dev`) |
+| Language | Symbol extraction | Discovery | Generation |
+|---|---|---|---|
+| Python | ✅ | ✅ | ✅ |
+| TypeScript / JavaScript / TSX / JSX | ✅ | ✅ | ✅ |
+| Go, Java, C#, Rust | grep + patterns | partial | best-effort |
 
 ## Troubleshooting
 
-**"Not Initialized" on `build`.** Run `synapse init` first.
+| Message | Fix |
+|---|---|
+| `Not Initialized` on `build` | Run `synapse init` |
+| `Analysis Required` | Run `synapse analyze` |
+| `Quota Exceeded` | Check `synapse info` |
+| Backend error mid-build | The CLI retries transient errors. Quote the `Session:` id when opening an issue. |
 
-**"Analysis Required".** Run `synapse analyze`. Re-run after significant refactors so the symbol map stays fresh.
+## Documentation
 
-**"Quota Exceeded".** Check `synapse info` for your current plan usage.
-
-**Backend errors mid-build.** The CLI retries transient errors automatically and will surface a session id — quote that when opening an issue.
+- **Getting started** — [synaps3.ai/docs](https://synaps3.ai/docs)
+- **API reference** — [synaps3.ai/docs/api](https://synaps3.ai/docs/api)
+- **Examples** — [github.com/2ndbrainlabs-ai/synapse-examples](https://github.com/2ndbrainlabs-ai/synapse-examples)
 
 ## Development
 
 ```bash
-git clone <this-repo>
-cd synapse-cli-ts
+git clone https://github.com/2ndbrainlabs-ai/synapse-cli.git
+cd synapse-cli
 npm install
 npm run dev -- <command>        # run against source
 npm run build                   # produce dist/
@@ -135,8 +124,22 @@ npm test                        # vitest suite
 npm run typecheck
 ```
 
-The `--dev` flag makes the CLI talk to `localhost:50051`, which is what `synapse-cli-backend` binds to by default. See `../synapse-cli-backend/README.md` for backend setup.
+## Contributing
+
+Contributions are welcome. See [CONTRIBUTING.md](./CONTRIBUTING.md) for how to file issues, run the test suite, and open a PR. All participation is subject to our [Code of Conduct](./CODE_OF_CONDUCT.md).
+
+## Security
+
+Please review our [Security Policy](./SECURITY.md) before reporting vulnerabilities.
 
 ## License
 
-MIT
+Licensed under the [Apache License, Version 2.0](./LICENSE). See [NOTICE](./NOTICE) for attribution.
+
+---
+
+<div align="center">
+
+Built by [2ndbrainlabs.ai](https://2ndbrainlabs.ai) · Follow updates on [X](https://x.com/2ndbrainlabs)
+
+</div>
