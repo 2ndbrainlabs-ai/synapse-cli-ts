@@ -140,6 +140,6 @@ Licensed under the [Apache License, Version 2.0](./LICENSE). See [NOTICE](./NOTI
 
 <div align="center">
 
-Built by [2ndbrainlabs.ai](https://2ndbrainlabs.ai) · Follow updates on [X](https://x.com/2ndbrainlabs)
+Built by [2nd Brain Inc.](https://2ndbrainlabs.ai)
 
 </div>
