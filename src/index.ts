@@ -86,21 +86,10 @@ program
   .command("init")
   .description("Initialize Synapse in the current directory")
   .option("--force", "Force re-initialization")
-  .option(
-    "--local",
-    "Initialize in local mode. Uses your Anthropic key (via ANTHROPIC_API_KEY " +
-      "or --anthropic-key) for codegen. No hosted quota, no code upload.",
-  )
-  .option(
-    "--anthropic-key <key>",
-    "Anthropic API key for --local mode. Env var ANTHROPIC_API_KEY works too.",
-  )
   .action(async (opts) => {
     const { runInit } = await import("./commands/init.js");
     await runInit({
       force: opts.force ?? false,
-      local: opts.local ?? false,
-      anthropicKey: opts.anthropicKey,
     });
   });
 

@@ -7,7 +7,6 @@ import {
   hasGlobalApiKey,
   isInitialized,
   loadConfig,
-  resolveAnthropicKey,
   resolveApiKey,
   saveConfig,
   setGlobalApiKey,
@@ -21,10 +20,12 @@ import { styledInput } from "../ui/styled-input.js";
 
 export interface RunInitOptions {
   force: boolean;
-  local: boolean;
-  anthropicKey?: string | null;
 }
 
+// `--local` is a build-time-only override (`synapse build --local`) — a
+// project's stored config never pins it to local mode. This keeps mode
+// switching a one-shot, per-invocation choice instead of a sticky setting
+// you have to re-init to undo.
 export async function runInit(opts: RunInitOptions): Promise<void> {
   const workingDir = process.cwd();
   const synapseDir = getProjectSynapseDir(workingDir);
@@ -39,22 +40,18 @@ export async function runInit(opts: RunInitOptions): Promise<void> {
   }
 
   displayBanner();
-  displayHeader(opts.local ? "Initialize (local mode)" : "Initialize", "🎉");
+  displayHeader("Initialize", "🎉");
 
   ensureGlobalSynapseDir();
   ensureProjectSynapseDir(workingDir);
-
-  if (opts.local) {
-    await runLocalInit(workingDir, synapseDir, opts.anthropicKey ?? null);
-    return;
-  }
 
   await runHostedInit(workingDir, synapseDir);
 }
 
 // ---------------------------------------------------------------------------
-// Hosted init — the original flow, unchanged in behavior. Writes mode: "hosted"
-// into the project config so downstream commands know which client to use.
+// Hosted init — the only init flow. Writes mode: "hosted" into the project
+// config so downstream commands know which client to use by default;
+// `synapse build --local` overrides it per-invocation without touching this.
 // ---------------------------------------------------------------------------
 
 async function runHostedInit(workingDir: string, synapseDir: string): Promise<void> {
@@ -115,72 +112,4 @@ async function runHostedInit(workingDir: string, synapseDir: string): Promise<vo
   }
 
   displayWelcome(["synapse analyze", "synapse build", "synapse info"]);
-}
-
-// ---------------------------------------------------------------------------
-// Local init — validates that an Anthropic key exists (env or --anthropic-key)
-// then writes mode: "local" into the project config. The key itself is NEVER
-// stored on disk — subsequent builds re-resolve it from env / flag.
-// ---------------------------------------------------------------------------
-
-async function runLocalInit(
-  workingDir: string,
-  synapseDir: string,
-  cliFlagKey: string | null,
-): Promise<void> {
-  const anthropicKey = resolveAnthropicKey(cliFlagKey);
-  if (!anthropicKey) {
-    printMissingAnthropicKey();
-    process.exit(1);
-  }
-
-  stepOk("Anthropic API key detected", cliFlagKey ? "from --anthropic-key" : "from ANTHROPIC_API_KEY");
-
-  const configPath = path.join(synapseDir, "config.json");
-  if (!fs.existsSync(configPath)) {
-    saveConfig(workingDir, {
-      initialized: true,
-      version: "1.0.0",
-      mode: "local",
-      created_at: new Date().toISOString(),
-    });
-  } else {
-    const cfg = loadConfig(workingDir);
-    cfg.mode = "local";
-    if (cfg.initialized === undefined) cfg.initialized = true;
-    saveConfig(workingDir, cfg);
-  }
-
-  stepOk("Project initialized", "mode: local");
-
-  // Fire telemetry (code-free, mode-tagged). We have no Synapse API key in
-  // local mode — trackEvent short-circuits on empty apiKey, so this is a
-  // best-effort event that the ui-backend will attribute anonymously via
-  // installation_id once the endpoint is updated.
-  try {
-    const { trackEvent } = await import("../grpc/telemetry.js");
-    trackEvent("init.local", "", workingDir).catch(() => {});
-  } catch {
-    /* optional */
-  }
-
-  displayWelcome([
-    "synapse analyze",
-    "synapse build   # uses ANTHROPIC_API_KEY",
-    "synapse info",
-  ]);
-}
-
-function printMissingAnthropicKey(): void {
-  console.log();
-  roundedBox("Anthropic API key required", "✖", t.err, [
-    "Local mode uses your Anthropic key for codegen (nothing is uploaded).",
-    "",
-    "Set it in your shell and re-run:",
-    `  ${t.cmd("export ANTHROPIC_API_KEY=sk-ant-…")}`,
-    `  ${t.cmd("synapse init --local")}`,
-    "",
-    "Or pass it inline:",
-    `  ${t.cmd("synapse init --local --anthropic-key sk-ant-…")}`,
-  ]);
 }

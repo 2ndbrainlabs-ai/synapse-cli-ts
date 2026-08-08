@@ -14,7 +14,6 @@
 
 import {
   isInitialized,
-  loadConfig,
   resolveAnthropicKey,
   resolveApiKey,
   resolveEffectiveMode,
@@ -75,16 +74,9 @@ function cliVersion(): string {
 export async function runBuildV2(opts: BuildV2Options): Promise<void> {
   const workingDir = process.cwd();
 
-  // Determine effective mode. --local flag overrides config; otherwise config wins.
-  let configMode: "hosted" | "local" | undefined;
-  if (isInitialized(workingDir)) {
-    try {
-      configMode = loadConfig(workingDir).mode as "hosted" | "local" | undefined;
-    } catch {
-      configMode = undefined;
-    }
-  }
-  const effectiveMode = resolveEffectiveMode(configMode, opts.local ?? false);
+  // --local is a one-shot override for this invocation only — no project
+  // config can pin mode to local (see resolveEffectiveMode).
+  const effectiveMode = resolveEffectiveMode(opts.local ?? false);
 
   // Local one-shot builds don't require prior `synapse init`.
   if (!isInitialized(workingDir) && effectiveMode !== "local") {

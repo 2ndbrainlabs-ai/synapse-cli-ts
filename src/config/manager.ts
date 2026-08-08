@@ -275,12 +275,11 @@ export function resolveAnthropicKey(cliFlagValue?: string | null): string | null
  *   - Otherwise, the project config's `mode` field wins.
  *   - Default is "hosted".
  */
-export function resolveEffectiveMode(
-  configMode: SynapseConfig["mode"] | undefined,
-  cliLocalFlag: boolean,
-): "hosted" | "local" {
-  if (cliLocalFlag) return "local";
-  return configMode === "local" ? "local" : "hosted";
+// `--local` is a one-shot, per-invocation override on `synapse build` only —
+// no project config can pin mode to local, so switching back to hosted never
+// requires re-init. Just stop passing --local next time.
+export function resolveEffectiveMode(cliLocalFlag: boolean): "hosted" | "local" {
+  return cliLocalFlag ? "local" : "hosted";
 }
 
 export function getConfigDisplay(config: SynapseConfig): Array<[string, string]> {
