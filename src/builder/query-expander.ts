@@ -186,7 +186,12 @@ function scanPublicExports(workingDir: string): Set<string> {
     }
 
     const root = tree.rootNode;
-    const codeBytes = Buffer.from(source, "utf-8");
+    // NOTE: tree-sitter Node's startIndex/endIndex are UTF-16 code-unit
+    // offsets, so slice the source STRING (also UTF-16) rather than a UTF-8
+    // Buffer. Slicing bytes shifts extracted text left by one per multi-byte
+    // character earlier in the file — enough to corrupt identifier names.
+    const sliceNode = (n: { startIndex: number; endIndex: number }): string =>
+      source.slice(n.startIndex, n.endIndex);
 
     for (let i = 0; i < root.childCount; i++) {
       const node = root.child(i);
@@ -199,13 +204,13 @@ function scanPublicExports(workingDir: string): Set<string> {
           const right = expr.childForFieldName("right");
           if (
             left?.type === "identifier" &&
-            codeBytes.subarray(left.startIndex, left.endIndex).toString("utf-8") === "__all__" &&
+            sliceNode(left) === "__all__" &&
             (right?.type === "list" || right?.type === "tuple")
           ) {
             for (let j = 0; j < right.childCount; j++) {
               const elt = right.child(j);
               if (elt?.type === "string") {
-                const raw = codeBytes.subarray(elt.startIndex, elt.endIndex).toString("utf-8");
+                const raw = sliceNode(elt);
                 const val = raw.replace(/^['"]|['"]$/g, "");
                 if (val) exported.add(val.toLowerCase());
               }
@@ -216,23 +221,23 @@ function scanPublicExports(workingDir: string): Set<string> {
 
       // from .submodule import name (re-exports)
       if (node.type === "import_from_statement") {
-        const text = codeBytes.subarray(node.startIndex, node.endIndex).toString("utf-8");
+        const text = sliceNode(node);
         if (text.match(/^from\s+\./)) {
           for (let j = 0; j < node.childCount; j++) {
             const child = node.child(j);
             if (child.type === "dotted_name" || child.type === "identifier") {
               const prev = child.previousSibling;
-              if (prev && codeBytes.subarray(prev.startIndex, prev.endIndex).toString("utf-8") === "import") {
-                const name = codeBytes.subarray(child.startIndex, child.endIndex).toString("utf-8");
+              if (prev && sliceNode(prev) === "import") {
+                const name = sliceNode(child);
                 if (name !== "*") exported.add(name.toLowerCase());
               }
             } else if (child.type === "aliased_import") {
               const aliasNode = child.childForFieldName("alias");
               const nameNode = child.childForFieldName("name");
               const effective = aliasNode
-                ? codeBytes.subarray(aliasNode.startIndex, aliasNode.endIndex).toString("utf-8")
+                ? sliceNode(aliasNode)
                 : nameNode
-                  ? codeBytes.subarray(nameNode.startIndex, nameNode.endIndex).toString("utf-8")
+                  ? sliceNode(nameNode)
                   : "";
               if (effective && effective !== "*") exported.add(effective.toLowerCase());
             }

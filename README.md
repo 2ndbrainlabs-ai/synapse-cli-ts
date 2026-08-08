@@ -48,6 +48,32 @@ Prefer to describe it yourself:
 synapse build --query "Expose user auth and profile lookup as MCP tools"
 ```
 
+## Run locally with your own Anthropic key
+
+Skip the hosted Synapse service entirely — codegen runs in-process using **your** Anthropic key. No quota, no code upload, no signup required.
+
+```bash
+export ANTHROPIC_API_KEY=sk-ant-…
+
+cd my-project
+synapse init --local            # writes mode: "local" to .synapse/config.json
+synapse build                   # uses your Anthropic key, generates locally
+```
+
+Prefer a one-shot without changing the project's mode:
+
+```bash
+synapse build --local --anthropic-key sk-ant-…
+```
+
+The Anthropic key is **never stored on disk** — it's read from `ANTHROPIC_API_KEY` or the `--anthropic-key` flag on every invocation. Locally-generated servers don't count against any quota; analyze runs are unbounded.
+
+Anonymous usage telemetry (no code, no prompts — just event names + counts) still flows to `api.synaps3.ai` so we can see adoption. Opt out with `SYNAPSE_TELEMETRY=0`.
+
+**Local-mode limits:**
+- Python target only (TypeScript target follows).
+- Auto flow (`--auto`) requires the hosted service. Use `--custom` (the default in local mode).
+
 ## Features
 
 - **Zero boilerplate** — tool schemas, argument validation, and MCP wire format handled for you.

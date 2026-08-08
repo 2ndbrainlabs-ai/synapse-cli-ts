@@ -35,7 +35,7 @@ const CARDS: Card[] = [
     value: "custom",
     title: "Custom",
     tagline: "Compose tools from any functions",
-    bullets: ["Full control", "Any language", "Guided prompts"],
+    bullets: ["Full control", "Python (more soon)", "Guided prompts"],
   },
 ];
 

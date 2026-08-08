@@ -1034,6 +1034,171 @@ export class SynapseClient {
   }
 
   // -----------------------------------------------------------------------
+  // nameEndpoints (v2 Auto-mode --smart-names, hosted) — CLI sends handler
+  // source + repo readme context, backend runs the naming LLM call
+  // server-side (billed/monetized) and returns tool_name + description per
+  // endpoint. Same request/retry shape as classifyCandidates.
+  // -----------------------------------------------------------------------
+
+  async nameEndpoints(opts: {
+    endpoints: Array<{
+      index: number;
+      method: string;
+      path: string;
+      handler_qualname: string;
+      existing_description: string;
+      handler_source: string;
+    }>;
+    workingDir: string;
+    readmeContext?: string;
+    sessionId?: string;
+    signal?: AbortSignal;
+    onStatus?: (stage: string, message: string, progress: number) => void;
+    timeoutMs?: number;
+  }): Promise<{
+    success: boolean;
+    names: Array<{ index: number; tool_name: string; description: string }>;
+    error: string;
+    sessionId: string;
+  }> {
+    const grpc = await import("@grpc/grpc-js");
+    const { loadProto } = await import("./proto-loader.js");
+    const { SynapseService } = loadProto();
+
+    const sessionId = opts.sessionId ?? _generateSessionId();
+
+    const apiKey = resolveApiKey(this.workingDir);
+    if (!apiKey) {
+      return { success: false, names: [], error: "Missing API key.", sessionId };
+    }
+
+    const MAX_ATTEMPTS = 3;
+    let lastResult: any = null;
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      lastResult = await this._nameEndpointsOnce(grpc, SynapseService, apiKey, sessionId, opts);
+
+      if (!lastResult.__transient) {
+        const { __transient: _t, ...clean } = lastResult;
+        return clean;
+      }
+
+      if (attempt < MAX_ATTEMPTS) {
+        const backoff = Math.min(1000 * 2 ** (attempt - 1), 8000);
+        opts.onStatus?.(
+          "retrying",
+          `Backend cold-start — retrying (attempt ${attempt + 1}/${MAX_ATTEMPTS})`,
+          0.1,
+        );
+        await sleep(backoff);
+      }
+    }
+
+    const { __transient: _t, ...clean } = lastResult ?? {};
+    return {
+      ...clean,
+      error: `Namer failed after ${MAX_ATTEMPTS} attempts: ${lastResult?.error ?? "unknown"}`,
+    };
+  }
+
+  private async _nameEndpointsOnce(
+    grpc: typeof import("@grpc/grpc-js"),
+    SynapseService: any,
+    apiKey: string,
+    sessionId: string,
+    opts: {
+      endpoints: Array<{
+        index: number;
+        method: string;
+        path: string;
+        handler_qualname: string;
+        existing_description: string;
+        handler_source: string;
+      }>;
+      readmeContext?: string;
+      signal?: AbortSignal;
+      onStatus?: (stage: string, message: string, progress: number) => void;
+      timeoutMs?: number;
+    },
+  ): Promise<any> {
+    const target = `${this.host}:${this.port}`;
+    const credentials = shouldUseSecure(this.host, this.port)
+      ? grpc.credentials.createSsl()
+      : grpc.credentials.createInsecure();
+
+    const client = new SynapseService(target, credentials, CHANNEL_OPTIONS);
+    const metadata = new grpc.Metadata();
+    metadata.set("x-api-key", apiKey);
+
+    const timeoutMs = opts.timeoutMs ?? 60_000;
+
+    return new Promise((resolve) => {
+      const call = client.Build(metadata);
+      let done = false;
+      let timeoutHandle: NodeJS.Timeout | null = null;
+
+      const finish = (payload: any) => {
+        if (done) return;
+        done = true;
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        try { call.end(); } catch { /* already closed */ }
+        client.close();
+        resolve({ ...payload, sessionId });
+      };
+
+      timeoutHandle = setTimeout(() => {
+        finish({ success: false, names: [], error: `timeout after ${timeoutMs}ms`, __transient: true });
+      }, timeoutMs);
+      timeoutHandle.unref?.();
+
+      const abortHandler = () => {
+        finish({ success: false, names: [], error: "aborted", __transient: false });
+      };
+      opts.signal?.addEventListener("abort", abortHandler, { once: true });
+
+      call.write({
+        name_request: {
+          request_id: sessionId,
+          endpoints: opts.endpoints,
+          readme_context: opts.readmeContext ?? "",
+        },
+      });
+
+      call.on("data", (msg: any) => {
+        if (msg.status_update) {
+          const u = msg.status_update;
+          opts.onStatus?.(u.stage ?? "", u.message ?? "", u.progress ?? 0);
+        } else if (msg.name_result) {
+          const r = msg.name_result;
+          let names: Array<{ index: number; tool_name: string; description: string }> = [];
+          try {
+            names = JSON.parse(r.names_json || "[]");
+          } catch { /* keep empty */ }
+          finish({ success: !!r.success, names, error: r.error ?? "", __transient: false });
+        } else if (msg.error) {
+          finish({
+            success: false, names: [], error: msg.error.message ?? "backend error",
+            __transient: false,
+          });
+        }
+      });
+
+      call.on("end", () => {
+        finish({ success: false, names: [], error: "stream ended before result", __transient: true });
+      });
+      call.on("error", (err: any) => {
+        const code = err.code as number | undefined;
+        const transient = code !== undefined && RETRYABLE_GRPC_CODES.has(code);
+        finish({
+          success: false, names: [],
+          error: `gRPC error: ${err.code ?? "UNKNOWN"}: ${err.details ?? err.message}`,
+          __transient: transient,
+        });
+      });
+    });
+  }
+
+  // -----------------------------------------------------------------------
   // Close (no-op convenience — each RPC creates its own client above)
   // -----------------------------------------------------------------------
 

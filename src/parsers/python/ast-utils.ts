@@ -1,19 +1,36 @@
 // src/parsers/python/ast-utils.ts
 //
 // Helper utilities for working with tree-sitter Python AST nodes.
+//
+// IMPORTANT: tree-sitter's Node.js binding reports `startIndex`/`endIndex` as
+// **UTF-16 code-unit offsets** (JS string indexes), NOT UTF-8 byte offsets.
+// Slicing a UTF-8 `Buffer` with these indexes shifts extracted text left by
+// `utf8_bytes(non-ASCII) - utf16_units(non-ASCII)` for every multi-byte char
+// that appears BEFORE the node in the file. In practice: an em-dash (3 UTF-8
+// bytes, 1 UTF-16 unit) anywhere earlier in the file corrupts every function
+// name after it by 2 characters. So we slice the source STRING here.
 
 import type TreeSitter from "tree-sitter";
+
+/**
+ * Backwards-compat: accept either the raw source string or a UTF-8 Buffer.
+ * Callers that still pass a Buffer are auto-decoded once per call — cheap
+ * for the sizes we handle (single source files).
+ */
+export type SourceLike = string | Buffer;
+
+function asString(src: SourceLike): string {
+  return typeof src === "string" ? src : src.toString("utf-8");
+}
 
 /**
  * Extract the first line of a node's text as its signature.
  */
 export function extractSignature(
   node: TreeSitter.SyntaxNode,
-  codeBytes: Buffer,
+  source: SourceLike,
 ): string {
-  const code = codeBytes
-    .subarray(node.startIndex, node.endIndex)
-    .toString("utf-8");
+  const code = asString(source).slice(node.startIndex, node.endIndex);
   return code.split("\n")[0];
 }
 
@@ -22,11 +39,9 @@ export function extractSignature(
  */
 export function getNodeText(
   node: TreeSitter.SyntaxNode,
-  codeBytes: Buffer,
+  source: SourceLike,
 ): string {
-  return codeBytes
-    .subarray(node.startIndex, node.endIndex)
-    .toString("utf-8");
+  return asString(source).slice(node.startIndex, node.endIndex);
 }
 
 /**
@@ -49,9 +64,9 @@ export function getChildByFieldName(
  */
 export function extractDecoratorName(
   node: TreeSitter.SyntaxNode,
-  codeBytes: Buffer,
+  source: SourceLike,
 ): string {
-  const text = getNodeText(node, codeBytes);
+  const text = getNodeText(node, source);
   // Remove @ prefix
   const expr = text.replace(/^@/, "").trim();
 

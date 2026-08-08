@@ -235,7 +235,6 @@ function extractFromFile(absPath: string, relPath: string): FunctionInfo[] {
   }
 
   const parser = getParser();
-  const codeBytes = Buffer.from(source, "utf-8");
 
   let tree: any;
   try {
@@ -245,7 +244,7 @@ function extractFromFile(absPath: string, relPath: string): FunctionInfo[] {
   }
 
   const results: FunctionInfo[] = [];
-  walkFunctions(tree.rootNode, codeBytes, relPath, results);
+  walkFunctions(tree.rootNode, source, relPath, results);
   return results;
 }
 
@@ -255,7 +254,7 @@ function extractFromFile(absPath: string, relPath: string): FunctionInfo[] {
 
 function walkFunctions(
   rootNode: TreeSitter.SyntaxNode,
-  codeBytes: Buffer,
+  source: string,
   relPath: string,
   results: FunctionInfo[],
 ): void {
@@ -284,7 +283,7 @@ function walkFunctions(
     }
 
     if (funcNode) {
-      const info = processFunctionNode(funcNode, decorators, codeBytes, relPath);
+      const info = processFunctionNode(funcNode, decorators, source, relPath);
       if (info) {
         results.push(info);
       }
@@ -306,12 +305,12 @@ function walkFunctions(
 function processFunctionNode(
   funcNode: TreeSitter.SyntaxNode,
   decorators: TreeSitter.SyntaxNode[],
-  codeBytes: Buffer,
+  source: string,
   relPath: string,
 ): FunctionInfo | null {
   const nameNode = getChildByFieldName(funcNode, "name");
   if (!nameNode) return null;
-  const name = getNodeText(nameNode, codeBytes);
+  const name = getNodeText(nameNode, source);
 
   // Tier 4: private / dunder
   if (name.startsWith("_")) return null;
@@ -322,7 +321,7 @@ function processFunctionNode(
 
   // Tier 5: skip-decorator check
   for (const dec of decorators) {
-    const decName = extractDecoratorName(dec, codeBytes);
+    const decName = extractDecoratorName(dec, source);
     if (decName && SKIP_DECORATORS.has(decName.toLowerCase())) return null;
   }
 
@@ -336,20 +335,20 @@ function processFunctionNode(
   // In tree-sitter-python the parent of an async function is still
   // "function_definition" but has an "async" keyword child. We check
   // if the text starts with "async".
-  const funcText = getNodeText(funcNode, codeBytes);
+  const funcText = getNodeText(funcNode, source);
   const isAsync = funcText.trimStart().startsWith("async ");
 
   // Parameters
   const { paramNames, paramTypes, paramDefaults } = extractParameters(
     funcNode,
-    codeBytes,
+    source,
   );
 
   // Return type
-  const returnType = extractReturnType(funcNode, codeBytes);
+  const returnType = extractReturnType(funcNode, source);
 
   // Docstring
-  const docstring = extractDocstring(funcNode, codeBytes);
+  const docstring = extractDocstring(funcNode, source);
 
   // Build signature string (matching Python implementation)
   const sigParts: string[] = [];
@@ -374,7 +373,7 @@ function processFunctionNode(
   const signature = `${asyncPrefix}def ${name}(${paramsStr})${retStr}`;
 
   // Endpoint type
-  const endpointType = detectEndpointType(decorators, paramNames, codeBytes);
+  const endpointType = detectEndpointType(decorators, paramNames, source);
 
   return {
     name,
@@ -397,7 +396,7 @@ function processFunctionNode(
 
 function extractParameters(
   funcNode: TreeSitter.SyntaxNode,
-  codeBytes: Buffer,
+  source: string,
 ): {
   paramNames: string[];
   paramTypes: string[];
@@ -427,37 +426,37 @@ function extractParameters(
 
     if (child.type === "identifier") {
       // Simple parameter with no annotation or default
-      paramNames.push(getNodeText(child, codeBytes));
+      paramNames.push(getNodeText(child, source));
       paramTypes.push("");
       paramDefaults.push(null);
     } else if (child.type === "default_parameter") {
       // param = default
       const nameChild = getChildByFieldName(child, "name");
       const valueChild = getChildByFieldName(child, "value");
-      paramNames.push(nameChild ? getNodeText(nameChild, codeBytes) : "");
+      paramNames.push(nameChild ? getNodeText(nameChild, source) : "");
       paramTypes.push("");
-      paramDefaults.push(valueChild ? getNodeText(valueChild, codeBytes) : null);
+      paramDefaults.push(valueChild ? getNodeText(valueChild, source) : null);
     } else if (child.type === "typed_parameter") {
       // param: type
       const nameChild = getChildByFieldName(child, "name") ?? child.child(0);
       const typeChild = getChildByFieldName(child, "type");
-      paramNames.push(nameChild ? getNodeText(nameChild, codeBytes) : "");
-      paramTypes.push(typeChild ? getNodeText(typeChild, codeBytes) : "");
+      paramNames.push(nameChild ? getNodeText(nameChild, source) : "");
+      paramTypes.push(typeChild ? getNodeText(typeChild, source) : "");
       paramDefaults.push(null);
     } else if (child.type === "typed_default_parameter") {
       // param: type = default
       const nameChild = getChildByFieldName(child, "name");
       const typeChild = getChildByFieldName(child, "type");
       const valueChild = getChildByFieldName(child, "value");
-      paramNames.push(nameChild ? getNodeText(nameChild, codeBytes) : "");
-      paramTypes.push(typeChild ? getNodeText(typeChild, codeBytes) : "");
-      paramDefaults.push(valueChild ? getNodeText(valueChild, codeBytes) : null);
+      paramNames.push(nameChild ? getNodeText(nameChild, source) : "");
+      paramTypes.push(typeChild ? getNodeText(typeChild, source) : "");
+      paramDefaults.push(valueChild ? getNodeText(valueChild, source) : null);
     } else if (child.type === "list_splat_pattern" || child.type === "dictionary_splat_pattern") {
       // *args or **kwargs
       const inner = child.child(0);
       if (inner) {
         const prefix = child.type === "list_splat_pattern" ? "*" : "**";
-        paramNames.push(prefix + getNodeText(inner, codeBytes));
+        paramNames.push(prefix + getNodeText(inner, source));
         paramTypes.push("");
         paramDefaults.push(null);
       }
@@ -473,11 +472,11 @@ function extractParameters(
 
 function extractReturnType(
   funcNode: TreeSitter.SyntaxNode,
-  codeBytes: Buffer,
+  source: string,
 ): string {
   const retNode = getChildByFieldName(funcNode, "return_type");
   if (!retNode) return "";
-  return getNodeText(retNode, codeBytes);
+  return getNodeText(retNode, source);
 }
 
 // =============================================================================
@@ -486,7 +485,7 @@ function extractReturnType(
 
 function extractDocstring(
   funcNode: TreeSitter.SyntaxNode,
-  codeBytes: Buffer,
+  source: string,
 ): string {
   const body = getChildByFieldName(funcNode, "body");
   if (!body || body.childCount === 0) return "";
@@ -498,7 +497,7 @@ function extractDocstring(
   const strNode = firstStmt.child(0);
   if (!strNode || strNode.type !== "string") return "";
 
-  let raw = getNodeText(strNode, codeBytes);
+  let raw = getNodeText(strNode, source);
 
   // Strip triple-quote wrappers
   if (raw.startsWith('"""') && raw.endsWith('"""')) {
@@ -522,12 +521,12 @@ function extractDocstring(
 function detectEndpointType(
   decorators: TreeSitter.SyntaxNode[],
   paramNames: string[],
-  codeBytes: Buffer,
+  source: string,
 ): string {
   const hasSelf = paramNames.includes("self") || paramNames.includes("cls");
 
   for (const dec of decorators) {
-    const decName = extractDecoratorName(dec, codeBytes);
+    const decName = extractDecoratorName(dec, source);
     if (
       decName === "get" ||
       decName === "post" ||

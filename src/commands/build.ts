@@ -36,6 +36,10 @@ export interface BuildOptions {
   validate: boolean;
   docs: boolean;
   generateOnly: boolean;
+  /** One-shot local-mode override for this invocation. */
+  local?: boolean;
+  /** Anthropic API key for --local; falls back to ANTHROPIC_API_KEY env. */
+  anthropicKey?: string | null;
 }
 
 // ---------------------------------------------------------------------------

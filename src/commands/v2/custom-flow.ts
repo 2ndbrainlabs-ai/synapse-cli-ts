@@ -9,7 +9,6 @@ import path from "node:path";
 import { input, checkbox } from "@inquirer/prompts";
 import { askSelect } from "../../ui/prompt.js";
 import type { SurfaceManifest, SurfaceFunction } from "../../extractors/core/surface-manifest.js";
-import { getBackendConfig } from "../../config/manager.js";
 import { t, stepInfo, stepWarn, sectionHeader } from "../../ui/theme.js";
 import { roundedBox } from "../../ui/box.js";
 import { Spinner } from "../../ui/spinner.js";
@@ -36,6 +35,10 @@ export interface CustomFlowOptions {
   /** SessionManager reference — used for recordError so failures land in
    *  the ledger for `synapse logs`. */
   session?: SessionManager;
+  /** Which client to use — "hosted" (gRPC) or "local" (in-process TS backend). */
+  effectiveMode?: "hosted" | "local";
+  /** Anthropic API key for local mode. Ignored when effectiveMode === "hosted". */
+  anthropicKey?: string | null;
 }
 
 /** Pick between "describe an intent" or "pick functions" — then collect the answer. */
@@ -90,7 +93,7 @@ async function collectIntent(functions: SurfaceFunction[]): Promise<{
 }
 
 /** Numeric-suffix writer — never overwrites existing files. */
-function writeWithSuffix(dir: string, baseName: string, ext: string, contents: string): string {
+export function writeWithSuffix(dir: string, baseName: string, ext: string, contents: string): string {
   fs.mkdirSync(dir, { recursive: true });
   let target = path.join(dir, `${baseName}_server.${ext}`);
   let n = 2;
@@ -103,7 +106,7 @@ function writeWithSuffix(dir: string, baseName: string, ext: string, contents: s
 }
 
 /** Merge new env vars into <workingDir>/.env.example without duplicating keys. */
-function mergeEnvExample(dir: string, envVars: string[]): void {
+export function mergeEnvExample(dir: string, envVars: string[]): void {
   if (envVars.length === 0) return;
   const envPath = path.join(dir, ".env.example");
   const existing: Record<string, string> = {};
@@ -138,6 +141,8 @@ async function tryDiscoverWorkflows(args: {
   deep: boolean;
   workingDir: string;
   session?: SessionManager;
+  effectiveMode?: "hosted" | "local";
+  anthropicKey?: string | null;
 }): Promise<WorkflowProposal[] | null> {
   if (args.manifest.functions.length < 2) return null;
 
@@ -171,13 +176,11 @@ async function tryDiscoverWorkflows(args: {
   const spinner2 = new Spinner("orbital");
   spinner2.start("Classifying candidates on the backend");
 
-  const { SynapseClient } = await import("../../grpc/client.js");
-  const backend = getBackendConfig();
-  const client = new SynapseClient({
-    url: backend.url ?? undefined,
-    host: backend.host ?? undefined,
-    port: backend.port ? parseInt(backend.port, 10) : undefined,
+  const { makeSynapseClient } = await import("../../grpc/client-factory.js");
+  const client = makeSynapseClient({
+    effectiveMode: args.effectiveMode ?? "hosted",
     workingDir: args.workingDir,
+    anthropicKey: args.anthropicKey ?? undefined,
   });
 
   let classify: Awaited<ReturnType<typeof client.classifyCandidates>>;
@@ -415,6 +418,8 @@ export async function runCustomFlow(opts: CustomFlowOptions): Promise<void> {
       deep: opts.deep ?? false,
       workingDir: opts.workingDir,
       session: opts.session,
+      effectiveMode: opts.effectiveMode,
+      anthropicKey: opts.anthropicKey,
     });
 
     if (proposals && proposals.length > 0) {
@@ -476,13 +481,11 @@ export async function runCustomFlow(opts: CustomFlowOptions): Promise<void> {
   state.spinner = new Spinner("orbital");
   state.spinner.start("Composing MCP tool");
 
-  const { SynapseClient } = await import("../../grpc/client.js");
-  const backend = getBackendConfig();
-  const client = new SynapseClient({
-    url: backend.url ?? undefined,
-    host: backend.host ?? undefined,
-    port: backend.port ? parseInt(backend.port, 10) : undefined,
+  const { makeSynapseClient } = await import("../../grpc/client-factory.js");
+  const client = makeSynapseClient({
+    effectiveMode: opts.effectiveMode ?? "hosted",
     workingDir: opts.workingDir,
+    anthropicKey: opts.anthropicKey ?? undefined,
   });
 
   let result;

@@ -84,25 +84,29 @@ function getParser(): any {
   return _parser;
 }
 
-function parseFile(filePath: string): { root: any; source: string; codeBytes: Buffer } | null {
+function parseFile(filePath: string): { root: any; source: string } | null {
   let source: string;
   try {
     source = fs.readFileSync(filePath, "utf-8");
   } catch {
     return null;
   }
-  const codeBytes = Buffer.from(source, "utf-8");
   const parser = getParser();
   try {
     const tree = parser.parse(source);
-    return { root: tree.rootNode, source, codeBytes };
+    return { root: tree.rootNode, source };
   } catch {
     return null;
   }
 }
 
-function nodeText(node: any, codeBytes: Buffer): string {
-  return codeBytes.subarray(node.startIndex, node.endIndex).toString("utf-8");
+// NOTE: tree-sitter's startIndex/endIndex are UTF-16 code-unit offsets, so we
+// slice the source STRING (also UTF-16), not a UTF-8 Buffer. Slicing bytes
+// shifts extracted text left by one character per multi-byte char earlier in
+// the file — enough to corrupt identifier names when e.g. an em-dash appears
+// in a docstring.
+function nodeText(node: any, source: string): string {
+  return source.slice(node.startIndex, node.endIndex);
 }
 
 // ---------------------------------------------------------------------------
@@ -134,7 +138,7 @@ const PYTHON_BUILTINS = new Set([
 function readFunctionSource(filePath: string, funcName: string): string {
   const parsed = parseFile(filePath);
   if (!parsed) return "";
-  const { root, codeBytes } = parsed;
+  const { root, source } = parsed;
 
   function walk(node: any): string | null {
     for (let i = 0; i < node.childCount; i++) {
@@ -151,8 +155,8 @@ function readFunctionSource(filePath: string, funcName: string): string {
 
       if (funcNode.type === "function_definition") {
         const nameNode = funcNode.childForFieldName("name");
-        if (nameNode && nodeText(nameNode, codeBytes) === funcName) {
-          return nodeText(child, codeBytes);
+        if (nameNode && nodeText(nameNode, source) === funcName) {
+          return nodeText(child, source);
         }
       }
 
@@ -206,7 +210,7 @@ function resolveImportPath(
 function findParentClass(
   rootNode: any,
   funcName: string,
-  codeBytes: Buffer,
+  source: string,
 ): [string, any] | null {
   for (let i = 0; i < rootNode.childCount; i++) {
     const child = rootNode.child(i);
@@ -214,7 +218,7 @@ function findParentClass(
 
     const nameNode = child.childForFieldName("name");
     if (!nameNode) continue;
-    const className = nodeText(nameNode, codeBytes);
+    const className = nodeText(nameNode, source);
 
     const bodyNode = child.childForFieldName("body");
     if (!bodyNode) continue;
@@ -230,7 +234,7 @@ function findParentClass(
       }
       if (funcNode.type === "function_definition") {
         const fnName = funcNode.childForFieldName("name");
-        if (fnName && nodeText(fnName, codeBytes) === funcName) {
+        if (fnName && nodeText(fnName, source) === funcName) {
           return [className, child];
         }
       }
@@ -242,7 +246,7 @@ function findParentClass(
 /**
  * Extract __init__ source from a class node.
  */
-function extractClassInitSource(classNode: any, codeBytes: Buffer): string {
+function extractClassInitSource(classNode: any, source: string): string {
   const bodyNode = classNode.childForFieldName("body");
   if (!bodyNode) return "";
 
@@ -257,8 +261,8 @@ function extractClassInitSource(classNode: any, codeBytes: Buffer): string {
     }
     if (funcNode.type === "function_definition") {
       const nameNode = funcNode.childForFieldName("name");
-      if (nameNode && nodeText(nameNode, codeBytes) === "__init__") {
-        return nodeText(funcNode, codeBytes);
+      if (nameNode && nodeText(nameNode, source) === "__init__") {
+        return nodeText(funcNode, source);
       }
     }
   }
@@ -270,7 +274,7 @@ function extractClassInitSource(classNode: any, codeBytes: Buffer): string {
  */
 function extractParamsFromNode(
   paramsNode: any,
-  codeBytes: Buffer,
+  source: string,
 ): ParamManifestEntry[] {
   if (!paramsNode) return [];
 
@@ -297,26 +301,26 @@ function extractParamsFromNode(
       let defaultVal: string | null = null;
 
       if (child.type === "identifier") {
-        name = nodeText(child, codeBytes);
+        name = nodeText(child, source);
       } else if (child.type === "typed_parameter") {
         const nameChild = child.children.find((c: any) => c.type === "identifier");
         const typeChild = child.childForFieldName("type");
-        name = nameChild ? nodeText(nameChild, codeBytes) : "";
-        typeStr = typeChild ? nodeText(typeChild, codeBytes) : "";
+        name = nameChild ? nodeText(nameChild, source) : "";
+        typeStr = typeChild ? nodeText(typeChild, source) : "";
       } else if (child.type === "default_parameter") {
         const nameChild = child.childForFieldName("name");
         const valChild = child.childForFieldName("value");
-        name = nameChild ? nodeText(nameChild, codeBytes) : "";
+        name = nameChild ? nodeText(nameChild, source) : "";
         hasDefault = true;
-        defaultVal = valChild ? nodeText(valChild, codeBytes) : null;
+        defaultVal = valChild ? nodeText(valChild, source) : null;
       } else if (child.type === "typed_default_parameter") {
         const nameChild = child.childForFieldName("name");
         const typeChild = child.childForFieldName("type");
         const valChild = child.childForFieldName("value");
-        name = nameChild ? nodeText(nameChild, codeBytes) : "";
-        typeStr = typeChild ? nodeText(typeChild, codeBytes) : "";
+        name = nameChild ? nodeText(nameChild, source) : "";
+        typeStr = typeChild ? nodeText(typeChild, source) : "";
         hasDefault = true;
-        defaultVal = valChild ? nodeText(valChild, codeBytes) : null;
+        defaultVal = valChild ? nodeText(valChild, source) : null;
       }
 
       if (name === "self" || name === "cls") continue;
@@ -340,7 +344,7 @@ function extractParamsFromNode(
  */
 function extractInitParamManifest(
   classNode: any,
-  codeBytes: Buffer,
+  source: string,
 ): ParamManifestEntry[] {
   const bodyNode = classNode.childForFieldName("body");
   if (!bodyNode) return [];
@@ -356,9 +360,9 @@ function extractInitParamManifest(
     }
     if (funcNode.type === "function_definition") {
       const nameNode = funcNode.childForFieldName("name");
-      if (nameNode && nodeText(nameNode, codeBytes) === "__init__") {
+      if (nameNode && nodeText(nameNode, source) === "__init__") {
         const paramsNode = funcNode.childForFieldName("parameters");
-        return extractParamsFromNode(paramsNode, codeBytes);
+        return extractParamsFromNode(paramsNode, source);
       }
     }
   }
@@ -379,9 +383,9 @@ function extractFileLevelImports(filePath: string): string[] {
     const node = parsed.root.child(i);
 
     if (node.type === "import_statement") {
-      imports.push(nodeText(node, parsed.codeBytes));
+      imports.push(nodeText(node, parsed.source));
     } else if (node.type === "import_from_statement") {
-      imports.push(nodeText(node, parsed.codeBytes));
+      imports.push(nodeText(node, parsed.source));
     }
 
     if (imports.length >= 40) break;
@@ -397,7 +401,7 @@ function extractFileLevelImports(filePath: string): string[] {
 function extractUsedNames(filePath: string, funcName: string): string[] {
   const parsed = parseFile(filePath);
   if (!parsed) return [];
-  const { root, codeBytes } = parsed;
+  const { root, source } = parsed;
 
   function findFuncBody(node: any): any | null {
     for (let i = 0; i < node.childCount; i++) {
@@ -414,7 +418,7 @@ function extractUsedNames(filePath: string, funcName: string): string[] {
 
       if (funcNode.type === "function_definition") {
         const nameNode = funcNode.childForFieldName("name");
-        if (nameNode && nodeText(nameNode, codeBytes) === funcName) {
+        if (nameNode && nodeText(nameNode, source) === funcName) {
           return funcNode.childForFieldName("body");
         }
       }
@@ -437,7 +441,7 @@ function extractUsedNames(filePath: string, funcName: string): string[] {
 
   function walkBody(node: any): void {
     if (node.type === "identifier") {
-      const name = nodeText(node, codeBytes);
+      const name = nodeText(node, source);
       if (!PYTHON_BUILTINS.has(name)) {
         names.add(name);
       }
@@ -447,7 +451,7 @@ function extractUsedNames(filePath: string, funcName: string): string[] {
         attrRoot = attrRoot.childForFieldName("object");
       }
       if (attrRoot && attrRoot.type === "identifier") {
-        const name = nodeText(attrRoot, codeBytes);
+        const name = nodeText(attrRoot, source);
         if (!PYTHON_BUILTINS.has(name)) {
           names.add(name);
         }
@@ -478,22 +482,22 @@ function resolveNeededImports(
 
   for (let i = 0; i < parsed.root.childCount; i++) {
     const node = parsed.root.child(i);
-    const stmtText = nodeText(node, parsed.codeBytes);
+    const stmtText = nodeText(node, parsed.source);
 
     if (node.type === "import_statement") {
       // import X, import X as Y, import X.Y
       for (let j = 0; j < node.childCount; j++) {
         const child = node.child(j);
         if (child.type === "dotted_name") {
-          const fullName = nodeText(child, parsed.codeBytes);
+          const fullName = nodeText(child, parsed.source);
           nameToStmt[fullName.split(".")[0]] = stmtText;
         } else if (child.type === "aliased_import") {
           const aliasNode = child.childForFieldName("alias");
           const nameNode = child.childForFieldName("name");
           const effective = aliasNode
-            ? nodeText(aliasNode, parsed.codeBytes)
+            ? nodeText(aliasNode, parsed.source)
             : nameNode
-              ? nodeText(nameNode, parsed.codeBytes).split(".")[0]
+              ? nodeText(nameNode, parsed.source).split(".")[0]
               : "";
           if (effective) nameToStmt[effective] = stmtText;
         }
@@ -506,17 +510,17 @@ function resolveNeededImports(
           // This could be the module name or an imported name
           // Skip the module name (comes after "from" keyword)
           const prevSibling = child.previousSibling;
-          if (prevSibling && nodeText(prevSibling, parsed.codeBytes) === "import") {
-            const name = nodeText(child, parsed.codeBytes);
+          if (prevSibling && nodeText(prevSibling, parsed.source) === "import") {
+            const name = nodeText(child, parsed.source);
             nameToStmt[name] = stmtText;
           }
         } else if (child.type === "aliased_import") {
           const aliasNode = child.childForFieldName("alias");
           const nameNode = child.childForFieldName("name");
           const effective = aliasNode
-            ? nodeText(aliasNode, parsed.codeBytes)
+            ? nodeText(aliasNode, parsed.source)
             : nameNode
-              ? nodeText(nameNode, parsed.codeBytes)
+              ? nodeText(nameNode, parsed.source)
               : "";
           if (effective) nameToStmt[effective] = stmtText;
         }
@@ -541,7 +545,7 @@ function extractParamManifest(
 ): ParamManifestEntry[] {
   const parsed = parseFile(filePath);
   if (!parsed) return [];
-  const { root, codeBytes } = parsed;
+  const { root, source } = parsed;
 
   function findFunc(node: any): any | null {
     for (let i = 0; i < node.childCount; i++) {
@@ -558,7 +562,7 @@ function extractParamManifest(
 
       if (funcNode.type === "function_definition") {
         const nameNode = funcNode.childForFieldName("name");
-        if (nameNode && nodeText(nameNode, codeBytes) === funcName) {
+        if (nameNode && nodeText(nameNode, source) === funcName) {
           return funcNode;
         }
       }
@@ -578,7 +582,7 @@ function extractParamManifest(
   if (!funcNode) return [];
 
   const paramsNode = funcNode.childForFieldName("parameters");
-  return extractParamsFromNode(paramsNode, codeBytes);
+  return extractParamsFromNode(paramsNode, source);
 }
 
 // ---------------------------------------------------------------------------
@@ -613,13 +617,13 @@ export function buildContextBundle(
 
     const parsed = parseFile(absPath);
     if (parsed) {
-      const parent = findParentClass(parsed.root, ep.name, parsed.codeBytes);
+      const parent = findParentClass(parsed.root, ep.name, parsed.source);
       if (parent) {
         const [cls, classNode] = parent;
         className = cls;
         classImportPath = resolveImportPath(absPath, ep.name, workingDir, cls);
-        initSource = extractClassInitSource(classNode, parsed.codeBytes);
-        initParams = extractInitParamManifest(classNode, parsed.codeBytes);
+        initSource = extractClassInitSource(classNode, parsed.source);
+        initParams = extractInitParamManifest(classNode, parsed.source);
         wrappingPattern = "class_method";
         conversionType = "class_method";
       }

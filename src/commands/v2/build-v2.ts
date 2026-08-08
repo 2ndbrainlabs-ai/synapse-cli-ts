@@ -12,10 +12,17 @@
 //
 // Keeps v1 (`runBuild` in ../build.ts) untouched for backwards compat.
 
-import { isInitialized, resolveApiKey } from "../../config/manager.js";
+import {
+  isInitialized,
+  loadConfig,
+  resolveAnthropicKey,
+  resolveApiKey,
+  resolveEffectiveMode,
+} from "../../config/manager.js";
 import { extractSurfaceStreamed } from "../../extractors/core/extractor.js";
 import { pickBuildMode, type BuildMode } from "./mode-picker.js";
 import { runAutoFlow } from "./auto-flow.js";
+import { runLocalAutoFlow } from "./local-auto-flow.js";
 import { runCustomFlow } from "./custom-flow.js";
 import { t, sectionHeader, stepInfo, stepWarn, stepOk } from "../../ui/theme.js";
 import { roundedBox } from "../../ui/box.js";
@@ -34,12 +41,19 @@ export interface BuildV2Options {
   query?: string;
   baseUrl?: string;
   serverName?: string;
+  /** v2 auto: read handler source (+ readme context) to name/describe tools
+   *  from real behavior instead of route + docstring alone. */
+  smartNames?: boolean;
   /** Attempt to resume the most recent unfinished session for this repo. */
   resume?: boolean;
   /** Soft wall-clock cap (minutes). Default 15. */
   maxTimeMinutes?: number;
   /** Enable deeper Custom-mode ranking (top-500 instead of top-200). */
   deep?: boolean;
+  /** One-shot local-mode override for this invocation. */
+  local?: boolean;
+  /** Anthropic API key for --local; falls back to ANTHROPIC_API_KEY env. */
+  anthropicKey?: string | null;
 }
 
 function parseMaxTimeMs(opts: BuildV2Options): number {
@@ -61,23 +75,58 @@ function cliVersion(): string {
 export async function runBuildV2(opts: BuildV2Options): Promise<void> {
   const workingDir = process.cwd();
 
-  if (!isInitialized(workingDir)) {
+  // Determine effective mode. --local flag overrides config; otherwise config wins.
+  let configMode: "hosted" | "local" | undefined;
+  if (isInitialized(workingDir)) {
+    try {
+      configMode = loadConfig(workingDir).mode as "hosted" | "local" | undefined;
+    } catch {
+      configMode = undefined;
+    }
+  }
+  const effectiveMode = resolveEffectiveMode(configMode, opts.local ?? false);
+
+  // Local one-shot builds don't require prior `synapse init`.
+  if (!isInitialized(workingDir) && effectiveMode !== "local") {
     roundedBox("Not Initialized", "✖", t.err, [
       "Synapse is not initialized in this directory.",
       "",
-      `Run ${t.cmd("synapse init")} first.`,
+      `Run ${t.cmd("synapse init")} first, or pass ${t.cmd("--local")} to build with your Anthropic key.`,
     ]);
     return;
   }
 
-  const apiKey = resolveApiKey(workingDir);
-  if (!apiKey) {
-    roundedBox("Missing API Key", "✖", t.err, [
-      "No API key found.",
-      "",
-      `Run ${t.cmd("synapse init")} or set ${t.cmd("SYNAPSE_API_KEY")}.`,
-    ]);
-    return;
+  // Resolve the key we'll actually use downstream.
+  let apiKey = "";
+  let anthropicKey: string | null = null;
+
+  if (effectiveMode === "local") {
+    anthropicKey = resolveAnthropicKey(opts.anthropicKey ?? null);
+    if (!anthropicKey) {
+      roundedBox("Anthropic API key required", "✖", t.err, [
+        "Local mode uses your Anthropic key for codegen.",
+        "",
+        "Set it in your shell:",
+        `  ${t.cmd("export ANTHROPIC_API_KEY=sk-ant-…")}`,
+        "",
+        "Or pass it inline:",
+        `  ${t.cmd("synapse build --local --anthropic-key sk-ant-…")}`,
+      ]);
+      return;
+    }
+  } else {
+    const resolved = resolveApiKey(workingDir);
+    if (!resolved) {
+      roundedBox("Missing API Key", "✖", t.err, [
+        "No API key found.",
+        "",
+        `Run ${t.cmd("synapse init")} or set ${t.cmd("SYNAPSE_API_KEY")}.`,
+        "",
+        `Or run this build in local mode: ${t.cmd("synapse build --local")}`,
+      ]);
+      return;
+    }
+    apiKey = resolved;
   }
 
   sectionHeader("Build MCP Server (v2)", "🏗️");
@@ -120,6 +169,9 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
 
   // ---------------------------------------------------------------------------
   // Mode: Auto vs Custom — needed to decide whether to include function needles.
+  // Local mode uses the same picker as hosted; --auto here discovers HTTP
+  // endpoints and generates a passthrough server file (no LLM call, nothing
+  // leaves the machine) instead of pushing config to the hosted backend.
   // ---------------------------------------------------------------------------
   let mode: BuildMode;
   try {
@@ -127,6 +179,9 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
   } catch {
     stepWarn("Cancelled", "no mode selected");
     return;
+  }
+  if (effectiveMode === "local") {
+    stepInfo("Mode", `local — ${mode} flow`);
   }
 
   // ---------------------------------------------------------------------------
@@ -200,13 +255,24 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
   // Dispatch — Auto or Custom.
   // ---------------------------------------------------------------------------
   try {
-    if (mode === "auto") {
+    if (mode === "auto" && effectiveMode === "local") {
+      await runLocalAutoFlow({
+        workingDir,
+        manifest,
+        serverName: opts.serverName,
+        baseUrl: opts.baseUrl,
+        sessionId,
+        anthropicKey,
+        smartNames: opts.smartNames,
+      });
+    } else if (mode === "auto") {
       await runAutoFlow({
         workingDir,
         manifest,
         serverName: opts.serverName,
         baseUrl: opts.baseUrl,
         sessionId,
+        smartNames: opts.smartNames,
       });
     } else {
       await runCustomFlow({
@@ -217,9 +283,12 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
         signal: session.signal,
         deep: opts.deep,
         session,
+        effectiveMode,
+        anthropicKey,
       });
     }
   } finally {
     session.dispose();
   }
+  void apiKey;
 }

@@ -6,6 +6,8 @@ import {
   ensureProjectSynapseDir,
   hasGlobalApiKey,
   isInitialized,
+  loadConfig,
+  resolveAnthropicKey,
   resolveApiKey,
   saveConfig,
   setGlobalApiKey,
@@ -17,11 +19,17 @@ import { roundedBox } from "../ui/box.js";
 import { displayBanner, displayHeader, displayWelcome } from "../ui/banner.js";
 import { styledInput } from "../ui/styled-input.js";
 
-export async function runInit(force: boolean): Promise<void> {
+export interface RunInitOptions {
+  force: boolean;
+  local: boolean;
+  anthropicKey?: string | null;
+}
+
+export async function runInit(opts: RunInitOptions): Promise<void> {
   const workingDir = process.cwd();
   const synapseDir = getProjectSynapseDir(workingDir);
 
-  if (isInitialized(workingDir) && !force) {
+  if (isInitialized(workingDir) && !opts.force) {
     roundedBox("Already Initialized", "⚠", t.warn, [
       "Synapse is already initialized in this directory.",
       "",
@@ -31,12 +39,25 @@ export async function runInit(force: boolean): Promise<void> {
   }
 
   displayBanner();
-  displayHeader("Initialize", "🎉");
+  displayHeader(opts.local ? "Initialize (local mode)" : "Initialize", "🎉");
 
   ensureGlobalSynapseDir();
   ensureProjectSynapseDir(workingDir);
 
-  // API key handling
+  if (opts.local) {
+    await runLocalInit(workingDir, synapseDir, opts.anthropicKey ?? null);
+    return;
+  }
+
+  await runHostedInit(workingDir, synapseDir);
+}
+
+// ---------------------------------------------------------------------------
+// Hosted init — the original flow, unchanged in behavior. Writes mode: "hosted"
+// into the project config so downstream commands know which client to use.
+// ---------------------------------------------------------------------------
+
+async function runHostedInit(workingDir: string, synapseDir: string): Promise<void> {
   let rawKey: string | null = null;
 
   if (hasGlobalApiKey()) {
@@ -71,17 +92,21 @@ export async function runInit(force: boolean): Promise<void> {
     stepOk("API key saved", "encrypted");
   }
 
-  // Create base config if not exists
+  // Stamp mode: "hosted" on the project config so it's explicit.
   const configPath = path.join(synapseDir, "config.json");
   if (!fs.existsSync(configPath)) {
     saveConfig(workingDir, {
       initialized: true,
       version: "1.0.0",
+      mode: "hosted",
       created_at: new Date().toISOString(),
     });
+  } else {
+    const cfg = loadConfig(workingDir);
+    cfg.mode = "hosted";
+    saveConfig(workingDir, cfg);
   }
 
-  // Fire telemetry (non-blocking)
   try {
     const { trackEvent } = await import("../grpc/telemetry.js");
     trackEvent("init", rawKey ?? "", workingDir).catch(() => {});
@@ -89,9 +114,73 @@ export async function runInit(force: boolean): Promise<void> {
     /* optional */
   }
 
+  displayWelcome(["synapse analyze", "synapse build", "synapse info"]);
+}
+
+// ---------------------------------------------------------------------------
+// Local init — validates that an Anthropic key exists (env or --anthropic-key)
+// then writes mode: "local" into the project config. The key itself is NEVER
+// stored on disk — subsequent builds re-resolve it from env / flag.
+// ---------------------------------------------------------------------------
+
+async function runLocalInit(
+  workingDir: string,
+  synapseDir: string,
+  cliFlagKey: string | null,
+): Promise<void> {
+  const anthropicKey = resolveAnthropicKey(cliFlagKey);
+  if (!anthropicKey) {
+    printMissingAnthropicKey();
+    process.exit(1);
+  }
+
+  stepOk("Anthropic API key detected", cliFlagKey ? "from --anthropic-key" : "from ANTHROPIC_API_KEY");
+
+  const configPath = path.join(synapseDir, "config.json");
+  if (!fs.existsSync(configPath)) {
+    saveConfig(workingDir, {
+      initialized: true,
+      version: "1.0.0",
+      mode: "local",
+      created_at: new Date().toISOString(),
+    });
+  } else {
+    const cfg = loadConfig(workingDir);
+    cfg.mode = "local";
+    if (cfg.initialized === undefined) cfg.initialized = true;
+    saveConfig(workingDir, cfg);
+  }
+
+  stepOk("Project initialized", "mode: local");
+
+  // Fire telemetry (code-free, mode-tagged). We have no Synapse API key in
+  // local mode — trackEvent short-circuits on empty apiKey, so this is a
+  // best-effort event that the ui-backend will attribute anonymously via
+  // installation_id once the endpoint is updated.
+  try {
+    const { trackEvent } = await import("../grpc/telemetry.js");
+    trackEvent("init.local", "", workingDir).catch(() => {});
+  } catch {
+    /* optional */
+  }
+
   displayWelcome([
     "synapse analyze",
-    "synapse build",
+    "synapse build   # uses ANTHROPIC_API_KEY",
     "synapse info",
+  ]);
+}
+
+function printMissingAnthropicKey(): void {
+  console.log();
+  roundedBox("Anthropic API key required", "✖", t.err, [
+    "Local mode uses your Anthropic key for codegen (nothing is uploaded).",
+    "",
+    "Set it in your shell and re-run:",
+    `  ${t.cmd("export ANTHROPIC_API_KEY=sk-ant-…")}`,
+    `  ${t.cmd("synapse init --local")}`,
+    "",
+    "Or pass it inline:",
+    `  ${t.cmd("synapse init --local --anthropic-key sk-ant-…")}`,
   ]);
 }

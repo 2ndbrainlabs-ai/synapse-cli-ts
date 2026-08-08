@@ -13,6 +13,14 @@ By participating in this project you agree to abide by our [Code of Conduct](./C
 - **Fix an issue** — look for issues tagged `good first issue` or `help wanted`.
 - **Improve docs** — README/CONTRIBUTING/inline JSDoc PRs are always welcome.
 
+## Where the code lives
+
+- `src/commands/` — CLI subcommands (`init`, `build`, `analyze`, `info`, ...).
+- `src/config/` — config resolution, encryption for the Synapse API key.
+- `src/extractors/` — deterministic tree-sitter surface extraction.
+- `src/grpc/` — hosted-mode client + tool executor.
+- **`src/backend/`** — **in-process codegen pipeline for `--local` mode. Most improvements to prompts, schemas, templates, and the smoke verifier live here.**
+
 ## Development setup
 
 ```bash

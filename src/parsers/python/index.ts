@@ -50,8 +50,9 @@ export class PythonParser implements LanguageParser {
 
   extractChunks(filePath: string, source: Buffer): ChunkInfo[] {
     const parser = this.getParser();
-    const tree = parser.parse(source.toString("utf-8"));
-    return extractChunks(tree.rootNode, source, filePath);
+    const src = source.toString("utf-8");
+    const tree = parser.parse(src);
+    return extractChunks(tree.rootNode, src, filePath);
   }
 
   // ---------------------------------------------------------------------------
@@ -64,9 +65,8 @@ export class PythonParser implements LanguageParser {
     relPath: string,
   ): FunctionInfo[] {
     const parser = this.getParser();
-    const codeBytes = Buffer.from(source, "utf-8");
     const tree = parser.parse(source);
-    return extractFunctionsFromTree(tree.rootNode, codeBytes, relPath);
+    return extractFunctionsFromTree(tree.rootNode, source, relPath);
   }
 
   // ---------------------------------------------------------------------------
@@ -75,7 +75,6 @@ export class PythonParser implements LanguageParser {
 
   parseModule(filePath: string, source: string): ModuleInfo {
     const parser = this.getParser();
-    const codeBytes = Buffer.from(source, "utf-8");
     let tree: any;
     try {
       tree = parser.parse(source);
@@ -88,7 +87,7 @@ export class PythonParser implements LanguageParser {
         functions: [],
       };
     }
-    return parseModuleFromTree(tree.rootNode, codeBytes, filePath);
+    return parseModuleFromTree(tree.rootNode, source, filePath);
   }
 }
 
@@ -136,7 +135,7 @@ const SKIP_NAME_EXACT = new Set([
  */
 function extractFunctionsFromTree(
   rootNode: TreeSitter.SyntaxNode,
-  codeBytes: Buffer,
+  source: string,
   relPath: string,
 ): FunctionInfo[] {
   const results: FunctionInfo[] = [];
@@ -159,7 +158,7 @@ function extractFunctionsFromTree(
     }
 
     if (funcNode) {
-      const info = buildFunctionInfo(funcNode, decorators, codeBytes, relPath);
+      const info = buildFunctionInfo(funcNode, decorators, source, relPath);
       if (info) results.push(info);
     }
 
@@ -175,12 +174,12 @@ function extractFunctionsFromTree(
 function buildFunctionInfo(
   funcNode: TreeSitter.SyntaxNode,
   decorators: TreeSitter.SyntaxNode[],
-  codeBytes: Buffer,
+  source: string,
   relPath: string,
 ): FunctionInfo | null {
   const nameNode = getChildByFieldName(funcNode, "name");
   if (!nameNode) return null;
-  const name = getNodeText(nameNode, codeBytes);
+  const name = getNodeText(nameNode, source);
 
   // Tier 4: private / dunder
   if (name.startsWith("_")) return null;
@@ -191,7 +190,7 @@ function buildFunctionInfo(
 
   // Tier 5: skip-decorator check
   for (const dec of decorators) {
-    const decName = extractDecoratorName(dec, codeBytes);
+    const decName = extractDecoratorName(dec, source);
     if (decName && SKIP_DECORATORS.has(decName.toLowerCase())) return null;
   }
 
@@ -201,16 +200,16 @@ function buildFunctionInfo(
 
   // ── Extract metadata ──
 
-  const funcText = getNodeText(funcNode, codeBytes);
+  const funcText = getNodeText(funcNode, source);
   const isAsync = funcText.trimStart().startsWith("async ");
 
   const { paramNames, paramTypes, paramDefaults } = extractParams(
     funcNode,
-    codeBytes,
+    source,
   );
 
-  const returnType = extractRetType(funcNode, codeBytes);
-  const docstring = extractDocStr(funcNode, codeBytes);
+  const returnType = extractRetType(funcNode, source);
+  const docstring = extractDocStr(funcNode, source);
 
   // Build signature
   const sigParts: string[] = [];
@@ -239,7 +238,7 @@ function buildFunctionInfo(
     paramNames.includes("self") || paramNames.includes("cls");
   let endpointType = hasSelf ? "method" : "function";
   for (const dec of decorators) {
-    const decName = extractDecoratorName(dec, codeBytes);
+    const decName = extractDecoratorName(dec, source);
     if (["get", "post", "put", "delete", "patch", "api_route"].includes(decName)) {
       endpointType = "fastapi";
       break;
@@ -271,7 +270,7 @@ function buildFunctionInfo(
 
 function extractParams(
   funcNode: TreeSitter.SyntaxNode,
-  codeBytes: Buffer,
+  source: string,
 ): {
   paramNames: string[];
   paramTypes: string[];
@@ -299,31 +298,31 @@ function extractParams(
     }
 
     if (child.type === "identifier") {
-      paramNames.push(getNodeText(child, codeBytes));
+      paramNames.push(getNodeText(child, source));
       paramTypes.push("");
       paramDefaults.push(null);
     } else if (child.type === "default_parameter") {
       const nameChild = getChildByFieldName(child, "name");
       const valueChild = getChildByFieldName(child, "value");
-      paramNames.push(nameChild ? getNodeText(nameChild, codeBytes) : "");
+      paramNames.push(nameChild ? getNodeText(nameChild, source) : "");
       paramTypes.push("");
       paramDefaults.push(
-        valueChild ? getNodeText(valueChild, codeBytes) : null,
+        valueChild ? getNodeText(valueChild, source) : null,
       );
     } else if (child.type === "typed_parameter") {
       const nameChild = getChildByFieldName(child, "name") ?? child.child(0);
       const typeChild = getChildByFieldName(child, "type");
-      paramNames.push(nameChild ? getNodeText(nameChild, codeBytes) : "");
-      paramTypes.push(typeChild ? getNodeText(typeChild, codeBytes) : "");
+      paramNames.push(nameChild ? getNodeText(nameChild, source) : "");
+      paramTypes.push(typeChild ? getNodeText(typeChild, source) : "");
       paramDefaults.push(null);
     } else if (child.type === "typed_default_parameter") {
       const nameChild = getChildByFieldName(child, "name");
       const typeChild = getChildByFieldName(child, "type");
       const valueChild = getChildByFieldName(child, "value");
-      paramNames.push(nameChild ? getNodeText(nameChild, codeBytes) : "");
-      paramTypes.push(typeChild ? getNodeText(typeChild, codeBytes) : "");
+      paramNames.push(nameChild ? getNodeText(nameChild, source) : "");
+      paramTypes.push(typeChild ? getNodeText(typeChild, source) : "");
       paramDefaults.push(
-        valueChild ? getNodeText(valueChild, codeBytes) : null,
+        valueChild ? getNodeText(valueChild, source) : null,
       );
     } else if (
       child.type === "list_splat_pattern" ||
@@ -333,7 +332,7 @@ function extractParams(
       if (inner) {
         const prefix =
           child.type === "list_splat_pattern" ? "*" : "**";
-        paramNames.push(prefix + getNodeText(inner, codeBytes));
+        paramNames.push(prefix + getNodeText(inner, source));
         paramTypes.push("");
         paramDefaults.push(null);
       }
@@ -345,16 +344,16 @@ function extractParams(
 
 function extractRetType(
   funcNode: TreeSitter.SyntaxNode,
-  codeBytes: Buffer,
+  source: string,
 ): string {
   const retNode = getChildByFieldName(funcNode, "return_type");
   if (!retNode) return "";
-  return getNodeText(retNode, codeBytes);
+  return getNodeText(retNode, source);
 }
 
 function extractDocStr(
   funcNode: TreeSitter.SyntaxNode,
-  codeBytes: Buffer,
+  source: string,
 ): string {
   const body = getChildByFieldName(funcNode, "body");
   if (!body || body.childCount === 0) return "";
@@ -365,7 +364,7 @@ function extractDocStr(
   const strNode = firstStmt.child(0);
   if (!strNode || strNode.type !== "string") return "";
 
-  let raw = getNodeText(strNode, codeBytes);
+  let raw = getNodeText(strNode, source);
 
   if (raw.startsWith('"""') && raw.endsWith('"""')) {
     raw = raw.slice(3, -3);
@@ -390,7 +389,7 @@ function extractDocStr(
  */
 function parseModuleFromTree(
   rootNode: TreeSitter.SyntaxNode,
-  codeBytes: Buffer,
+  source: string,
   filePath: string,
 ): ModuleInfo {
   const imports: string[] = [];
@@ -411,7 +410,7 @@ function parseModuleFromTree(
               ? getChildByFieldName(child, "name")
               : child;
           if (nameNode) {
-            imports.push(getNodeText(nameNode, codeBytes));
+            imports.push(getNodeText(nameNode, source));
           }
         }
       }
@@ -419,7 +418,7 @@ function parseModuleFromTree(
       // from foo import bar
       const moduleNode = getChildByFieldName(node, "module_name");
       if (moduleNode) {
-        imports.push(getNodeText(moduleNode, codeBytes));
+        imports.push(getNodeText(moduleNode, source));
       }
     }
 
@@ -435,19 +434,19 @@ function parseModuleFromTree(
     const child = rootNode.child(i)!;
 
     if (child.type === "function_definition") {
-      functions.push(buildAnalyzerFunctionInfo(child, codeBytes));
+      functions.push(buildAnalyzerFunctionInfo(child, source));
     } else if (child.type === "decorated_definition") {
       // Check if the inner definition is a function or class
       for (let j = 0; j < child.childCount; j++) {
         const inner = child.child(j)!;
         if (inner.type === "function_definition") {
-          functions.push(buildAnalyzerFunctionInfo(inner, codeBytes));
+          functions.push(buildAnalyzerFunctionInfo(inner, source));
         } else if (inner.type === "class_definition") {
-          classes.push(buildClassInfo(inner, codeBytes));
+          classes.push(buildClassInfo(inner, source));
         }
       }
     } else if (child.type === "class_definition") {
-      classes.push(buildClassInfo(child, codeBytes));
+      classes.push(buildClassInfo(child, source));
     }
   }
 
@@ -469,12 +468,12 @@ function parseModuleFromTree(
 
 function buildAnalyzerFunctionInfo(
   funcNode: TreeSitter.SyntaxNode,
-  codeBytes: Buffer,
+  source: string,
 ): AnalyzerFunctionInfo {
   const nameNode = getChildByFieldName(funcNode, "name");
-  const name = nameNode ? getNodeText(nameNode, codeBytes) : "unknown";
+  const name = nameNode ? getNodeText(nameNode, source) : "unknown";
 
-  const funcText = getNodeText(funcNode, codeBytes);
+  const funcText = getNodeText(funcNode, source);
   const isAsync = funcText.trimStart().startsWith("async ");
 
   // Parameters (just names for the analyzer)
@@ -484,14 +483,14 @@ function buildAnalyzerFunctionInfo(
     for (let i = 0; i < paramsNode.childCount; i++) {
       const child = paramsNode.child(i)!;
       if (child.type === "identifier") {
-        parameters.push(getNodeText(child, codeBytes));
+        parameters.push(getNodeText(child, source));
       } else if (
         child.type === "typed_parameter" ||
         child.type === "default_parameter" ||
         child.type === "typed_default_parameter"
       ) {
         const paramName = getChildByFieldName(child, "name") ?? child.child(0);
-        if (paramName) parameters.push(getNodeText(paramName, codeBytes));
+        if (paramName) parameters.push(getNodeText(paramName, source));
       } else if (
         child.type === "list_splat_pattern" ||
         child.type === "dictionary_splat_pattern"
@@ -500,7 +499,7 @@ function buildAnalyzerFunctionInfo(
         if (inner) {
           const prefix =
             child.type === "list_splat_pattern" ? "*" : "**";
-          parameters.push(prefix + getNodeText(inner, codeBytes));
+          parameters.push(prefix + getNodeText(inner, source));
         }
       }
     }
@@ -508,7 +507,7 @@ function buildAnalyzerFunctionInfo(
 
   // Return type
   const retNode = getChildByFieldName(funcNode, "return_type");
-  const returnType = retNode ? getNodeText(retNode, codeBytes) : "Any";
+  const returnType = retNode ? getNodeText(retNode, source) : "Any";
 
   // Build signature with type annotations
   const sigParts: string[] = [];
@@ -527,21 +526,21 @@ function buildAnalyzerFunctionInfo(
       }
 
       if (child.type === "identifier") {
-        sigParts.push(getNodeText(child, codeBytes));
+        sigParts.push(getNodeText(child, source));
       } else if (child.type === "typed_parameter") {
         const paramName = getChildByFieldName(child, "name") ?? child.child(0);
         const typeNode = getChildByFieldName(child, "type");
-        const pName = paramName ? getNodeText(paramName, codeBytes) : "";
-        const pType = typeNode ? getNodeText(typeNode, codeBytes) : "";
+        const pName = paramName ? getNodeText(paramName, source) : "";
+        const pType = typeNode ? getNodeText(typeNode, source) : "";
         sigParts.push(pType ? `${pName}: ${pType}` : pName);
       } else if (child.type === "default_parameter") {
         const paramName = getChildByFieldName(child, "name");
-        sigParts.push(paramName ? getNodeText(paramName, codeBytes) : "");
+        sigParts.push(paramName ? getNodeText(paramName, source) : "");
       } else if (child.type === "typed_default_parameter") {
         const paramName = getChildByFieldName(child, "name");
         const typeNode = getChildByFieldName(child, "type");
-        const pName = paramName ? getNodeText(paramName, codeBytes) : "";
-        const pType = typeNode ? getNodeText(typeNode, codeBytes) : "";
+        const pName = paramName ? getNodeText(paramName, source) : "";
+        const pType = typeNode ? getNodeText(typeNode, source) : "";
         sigParts.push(pType ? `${pName}: ${pType}` : pName);
       } else if (
         child.type === "list_splat_pattern" ||
@@ -551,7 +550,7 @@ function buildAnalyzerFunctionInfo(
         if (inner) {
           const prefix =
             child.type === "list_splat_pattern" ? "*" : "**";
-          sigParts.push(prefix + getNodeText(inner, codeBytes));
+          sigParts.push(prefix + getNodeText(inner, source));
         }
       }
     }
@@ -559,7 +558,7 @@ function buildAnalyzerFunctionInfo(
   const signature = `def ${name}(${sigParts.join(", ")}) -> ${returnType}`;
 
   // Docstring
-  const docstring = extractDocStr(funcNode, codeBytes);
+  const docstring = extractDocStr(funcNode, source);
 
   return {
     name,
@@ -578,10 +577,10 @@ function buildAnalyzerFunctionInfo(
 
 function buildClassInfo(
   classNode: TreeSitter.SyntaxNode,
-  codeBytes: Buffer,
+  source: string,
 ): ClassInfo {
   const nameNode = getChildByFieldName(classNode, "name");
-  const name = nameNode ? getNodeText(nameNode, codeBytes) : "unknown";
+  const name = nameNode ? getNodeText(nameNode, source) : "unknown";
 
   // Base classes
   const bases: string[] = [];
@@ -591,7 +590,7 @@ function buildClassInfo(
     for (let i = 0; i < superclasses.childCount; i++) {
       const child = superclasses.child(i)!;
       if (child.type !== "(" && child.type !== ")" && child.type !== ",") {
-        bases.push(getNodeText(child, codeBytes));
+        bases.push(getNodeText(child, source));
       }
     }
   }
@@ -604,7 +603,7 @@ function buildClassInfo(
     if (firstStmt && firstStmt.type === "expression_statement") {
       const strNode = firstStmt.child(0);
       if (strNode && strNode.type === "string") {
-        let raw = getNodeText(strNode, codeBytes);
+        let raw = getNodeText(strNode, source);
         if (raw.startsWith('"""') && raw.endsWith('"""')) {
           raw = raw.slice(3, -3);
         } else if (raw.startsWith("'''") && raw.endsWith("'''")) {
@@ -625,12 +624,12 @@ function buildClassInfo(
     for (let i = 0; i < body.childCount; i++) {
       const child = body.child(i)!;
       if (child.type === "function_definition") {
-        methods.push(buildAnalyzerFunctionInfo(child, codeBytes));
+        methods.push(buildAnalyzerFunctionInfo(child, source));
       } else if (child.type === "decorated_definition") {
         for (let j = 0; j < child.childCount; j++) {
           const inner = child.child(j)!;
           if (inner.type === "function_definition") {
-            methods.push(buildAnalyzerFunctionInfo(inner, codeBytes));
+            methods.push(buildAnalyzerFunctionInfo(inner, source));
           }
         }
       }

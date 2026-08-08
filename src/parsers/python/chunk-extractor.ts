@@ -17,7 +17,7 @@ import path from "node:path";
  */
 export function extractChunks(
   rootNode: TreeSitter.SyntaxNode,
-  codeBytes: Buffer,
+  source: string,
   filePath: string,
 ): ChunkInfo[] {
   const chunks: ChunkInfo[] = [];
@@ -30,9 +30,9 @@ export function extractChunks(
         filePath,
         fileName,
         type: "function",
-        name: nameNode ? getNodeText(nameNode, codeBytes) : "unknown",
-        signature: extractSignature(node, codeBytes),
-        code: getNodeText(node, codeBytes),
+        name: nameNode ? getNodeText(nameNode, source) : "unknown",
+        signature: extractSignature(node, source),
+        code: getNodeText(node, source),
         startLine: node.startPosition.row + 1,
         endLine: node.endPosition.row + 1,
       });
@@ -42,9 +42,9 @@ export function extractChunks(
         filePath,
         fileName,
         type: "class",
-        name: nameNode ? getNodeText(nameNode, codeBytes) : "unknown",
-        signature: extractSignature(node, codeBytes),
-        code: getNodeText(node, codeBytes),
+        name: nameNode ? getNodeText(nameNode, source) : "unknown",
+        signature: extractSignature(node, source),
+        code: getNodeText(node, source),
         startLine: node.startPosition.row + 1,
         endLine: node.endPosition.row + 1,
       });

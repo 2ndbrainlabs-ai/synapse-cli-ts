@@ -41,7 +41,43 @@ message BuildMessage {
     // v2 Custom-mode discovery: parallel Haiku classifier fan-out.
     ClassifyCandidatesRequest classify_request = 9;
     ClassifyCandidatesResult  classify_result  = 10;
+    // v2 Auto-mode naming: CLI sends endpoint handler source + repo readme
+    // context, backend reads it and returns an agent-legible tool_name +
+    // description per endpoint (mirrors the local --smart-names pass, but
+    // billed/run server-side for hosted builds).
+    NameEndpointsRequest name_request = 11;
+    NameEndpointsResult  name_result  = 12;
   }
+}
+
+// ============================================================================
+// V2 AUTO-MODE NAMING MESSAGES
+// ============================================================================
+
+// One endpoint's context for the namer — raw handler source plus whatever
+// docstring the extractor already found (may be empty).
+message EndpointContext {
+  int32  index               = 1;   // Position in the CLI's endpoint list — echoed back.
+  string method              = 2;
+  string path                = 3;
+  string handler_qualname    = 4;
+  string existing_description = 5;  // Docstring-derived, empty if none.
+  string handler_source      = 6;   // Raw source of the handler function, CLI-truncated.
+}
+
+// CLI → backend: name a batch of endpoints from their real source, optionally
+// with repo-level context (README / docs excerpts) for domain framing.
+message NameEndpointsRequest {
+  string request_id            = 1;   // Session id echoed in traces.
+  repeated EndpointContext endpoints = 2;
+  string readme_context         = 3;  // README/docs excerpt, CLI-truncated. May be empty.
+}
+
+// Backend → CLI: one {index, tool_name, description} per input endpoint.
+message NameEndpointsResult {
+  bool   success    = 1;
+  string names_json = 2;   // JSON list of {index, tool_name, description}.
+  string error      = 3;
 }
 
 // ============================================================================

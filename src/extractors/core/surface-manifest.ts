@@ -38,6 +38,12 @@ export interface HttpEndpoint {
   headers_hint: Header[];
   /** snake_case tool name derived from method + path/handler. */
   suggested_tool_name: string;
+  /** Repo-relative path to the file declaring the handler. */
+  file_path: string;
+  /** 1-indexed start line of the handler function definition. */
+  start_line: number;
+  /** 1-indexed end line of the handler function definition. */
+  end_line: number;
 }
 
 /** A public function discovered by the extractor — feeds Custom mode. */

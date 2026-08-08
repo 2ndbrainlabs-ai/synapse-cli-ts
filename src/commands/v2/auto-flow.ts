@@ -18,6 +18,7 @@ import {
 } from "../../backend/ui-client.js";
 import { t, stepOk, stepInfo } from "../../ui/theme.js";
 import { roundedBox } from "../../ui/box.js";
+import { Spinner } from "../../ui/spinner.js";
 
 const BASE_URL_VAR = "ENDPOINT_BASE_URL";
 const BASE_URL_PLACEHOLDER = "<your-app-deployed-url>";
@@ -52,6 +53,11 @@ export interface AutoFlowOptions {
   /** Session id (from SessionManager) — echoed in the success footer so
    *  users can quote it when reporting an issue. */
   sessionId?: string;
+  /** --smart-names: have the backend read handler source (+ readme context)
+   *  and name/describe tools from real behavior instead of route + docstring
+   *  alone. Runs server-side (billed) — nothing changes on the CLI's own
+   *  compute, only the request sent to synapse-ui-backend/grpc.synaps3.ai. */
+  smartNames?: boolean;
 }
 
 export async function runAutoFlow(opts: AutoFlowOptions): Promise<void> {
@@ -73,10 +79,14 @@ export async function runAutoFlow(opts: AutoFlowOptions): Promise<void> {
     `${endpoints.length} endpoint${endpoints.length === 1 ? "" : "s"} (${opts.manifest.framework ?? "unknown framework"})`,
   );
 
-  const selected = await pickEndpoints(endpoints);
+  let selected = await pickEndpoints(endpoints);
   if (selected.length === 0) {
     stepInfo("No endpoints selected", "aborting");
     return;
+  }
+
+  if (opts.smartNames) {
+    selected = await maybeNameEndpoints(selected, opts);
   }
 
   const baseUrl =
@@ -157,4 +167,50 @@ export async function runAutoFlow(opts: AutoFlowOptions): Promise<void> {
     stepInfo("Session", `${opts.sessionId}  ${t.dim("— quote this when reporting an issue")}`);
   }
   stepOk("Done");
+}
+
+/**
+ * --smart-names, hosted: sends handler source (+ readme context) to the
+ * backend's NameEndpointsRequest RPC so it can read the code and return an
+ * agent-legible tool_name + description per endpoint. The LLM call itself
+ * runs server-side (billed/monetized) — only the request payload changes
+ * here. Falls back to the mechanical suggested_tool_name/description (per
+ * endpoint, or entirely) on any failure.
+ */
+async function maybeNameEndpoints(
+  endpoints: HttpEndpoint[],
+  opts: AutoFlowOptions,
+): Promise<HttpEndpoint[]> {
+  const spinner = new Spinner("orbital");
+  spinner.start("Naming tools from handler source");
+  try {
+    const { buildEndpointContexts } = await import("../../backend/endpoint-namer.js");
+    const { readRepoContext } = await import("../../backend/repo-context.js");
+    const { makeSynapseClient } = await import("../../grpc/client-factory.js");
+
+    const client = makeSynapseClient({ effectiveMode: "hosted", workingDir: opts.workingDir });
+    const contexts = buildEndpointContexts(endpoints, opts.workingDir);
+    const result = await client.nameEndpoints({
+      endpoints: contexts,
+      workingDir: opts.workingDir,
+      readmeContext: readRepoContext(opts.workingDir),
+      sessionId: opts.sessionId,
+    });
+
+    if (!result.success) {
+      spinner.fail("Naming pass failed", result.error || "using route-derived names instead");
+      return endpoints;
+    }
+
+    spinner.complete(`Named ${result.names.length}/${endpoints.length} tool(s) from source`);
+    const byIndex = new Map(result.names.map((n) => [n.index, n]));
+    return endpoints.map((ep, i) => {
+      const named = byIndex.get(i);
+      if (!named) return ep;
+      return { ...ep, suggested_tool_name: named.tool_name, description: named.description };
+    });
+  } catch {
+    spinner.fail("Naming pass failed", "using route-derived names instead");
+    return endpoints;
+  }
 }

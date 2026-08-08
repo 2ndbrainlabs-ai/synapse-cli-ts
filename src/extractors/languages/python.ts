@@ -140,7 +140,7 @@ function decoratorToRoute(dec: DecoratorHit): RouteInfo | null {
 
 function extractDocstring(
   funcNode: TreeSitter.SyntaxNode,
-  bytes: Buffer,
+  source: string,
 ): string {
   const body = getChildByFieldName(funcNode, "body");
   if (!body || body.childCount === 0) return "";
@@ -148,7 +148,7 @@ function extractDocstring(
   if (!first || first.type !== "expression_statement") return "";
   const str = first.child(0);
   if (!str || str.type !== "string") return "";
-  let raw = getNodeText(str, bytes);
+  let raw = getNodeText(str, source);
   const strip = (q: string, n: number) =>
     raw.startsWith(q) && raw.endsWith(q) ? raw.slice(n, -n) : raw;
   raw = strip('"""', 3);
@@ -159,8 +159,8 @@ function extractDocstring(
 }
 
 /** First line of the function definition — used as the signature. */
-function firstLine(node: TreeSitter.SyntaxNode, bytes: Buffer): string {
-  const text = getNodeText(node, bytes);
+function firstLine(node: TreeSitter.SyntaxNode, source: string): string {
+  const text = getNodeText(node, source);
   return text.split("\n", 1)[0].trim();
 }
 
@@ -234,7 +234,6 @@ export function extractPythonSurface(opts: PythonExtractorOptions): SurfaceManif
     } catch {
       continue;
     }
-    const bytes = Buffer.from(source, "utf-8");
     let tree: any;
     try {
       tree = parser.parse(source);
@@ -251,7 +250,7 @@ export function extractPythonSurface(opts: PythonExtractorOptions): SurfaceManif
 
     const relPath = path.relative(workingDir, abs);
     const module = pathToModule(relPath);
-    walkFunctionDefs(tree.rootNode, bytes, relPath, module, endpoints, functions);
+    walkFunctionDefs(tree.rootNode, source, relPath, module, endpoints, functions);
   }
 
   const framework = topFramework(frameworkHits);
@@ -298,7 +297,7 @@ function walk(dir: string, root: string, out: string[], maxFiles: number): void 
 
 function walkFunctionDefs(
   node: TreeSitter.SyntaxNode,
-  bytes: Buffer,
+  source: string,
   relPath: string,
   moduleDotted: string,
   endpoints: HttpEndpoint[],
@@ -313,8 +312,8 @@ function walkFunctionDefs(
       const child = node.child(i)!;
       if (child.type === "decorator") {
         decorators.push({
-          simple_name: extractDecoratorName(child, bytes),
-          raw: getNodeText(child, bytes),
+          simple_name: extractDecoratorName(child, source),
+          raw: getNodeText(child, source),
         });
       } else if (child.type === "function_definition") {
         funcNode = child;
@@ -328,11 +327,11 @@ function walkFunctionDefs(
   if (funcNode) {
     const nameNode = getChildByFieldName(funcNode, "name");
     if (nameNode) {
-      const name = getNodeText(nameNode, bytes);
+      const name = getNodeText(nameNode, source);
       const isPrivate = name.startsWith("_");
-      const funcText = getNodeText(funcNode, bytes);
+      const funcText = getNodeText(funcNode, source);
       const isAsync = funcText.trimStart().startsWith("async ");
-      const docstring = extractDocstring(funcNode, bytes);
+      const docstring = extractDocstring(funcNode, source);
 
       // Endpoint? Look for a route-shaped decorator.
       let route: RouteInfo | null = null;
@@ -351,6 +350,9 @@ function walkFunctionDefs(
           payload_example: null, // M1: best-effort; can be enriched later
           headers_hint: [], // M1: none inferred
           suggested_tool_name: suggestToolName(route.method, route.path, name),
+          file_path: relPath,
+          start_line: funcNode.startPosition.row + 1,
+          end_line: funcNode.endPosition.row + 1,
         });
       }
 
@@ -360,7 +362,7 @@ function walkFunctionDefs(
         functions.push({
           module: moduleDotted,
           qualname: name,
-          signature: firstLine(funcNode, bytes),
+          signature: firstLine(funcNode, source),
           docstring,
           is_async: isAsync,
           is_public: true,
@@ -375,7 +377,7 @@ function walkFunctionDefs(
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i)!;
     if (child === handledInnerFunc) continue; // already processed via decorated_definition
-    walkFunctionDefs(child, bytes, relPath, moduleDotted, endpoints, functions);
+    walkFunctionDefs(child, source, relPath, moduleDotted, endpoints, functions);
   }
 }
 

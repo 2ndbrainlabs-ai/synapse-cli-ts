@@ -69,14 +69,14 @@ function decoratorToRoute(dec: DecoratorHit): RouteInfo | null {
 // AST helpers
 // -----------------------------------------------------------------------------
 
-function extractDocstring(funcNode: TreeSitter.SyntaxNode, bytes: Buffer): string {
+function extractDocstring(funcNode: TreeSitter.SyntaxNode, source: string): string {
   const body = getChildByFieldName(funcNode, "body");
   if (!body || body.childCount === 0) return "";
   const first = body.child(0);
   if (!first || first.type !== "expression_statement") return "";
   const str = first.child(0);
   if (!str || str.type !== "string") return "";
-  let raw = getNodeText(str, bytes);
+  let raw = getNodeText(str, source);
   const strip = (q: string, n: number) =>
     (raw.startsWith(q) && raw.endsWith(q) ? raw.slice(n, -n) : raw);
   raw = strip('"""', 3);
@@ -86,8 +86,8 @@ function extractDocstring(funcNode: TreeSitter.SyntaxNode, bytes: Buffer): strin
   return raw.trim().slice(0, 500);
 }
 
-function firstLine(node: TreeSitter.SyntaxNode, bytes: Buffer): string {
-  return getNodeText(node, bytes).split("\n", 1)[0].trim();
+function firstLine(node: TreeSitter.SyntaxNode, source: string): string {
+  return getNodeText(node, source).split("\n", 1)[0].trim();
 }
 
 function suggestToolName(method: HttpMethod, routePath: string, handlerName: string): string {
@@ -116,7 +116,7 @@ function isInsideClass(node: TreeSitter.SyntaxNode): boolean {
 
 function walkFunctionDefs(
   node: TreeSitter.SyntaxNode,
-  bytes: Buffer,
+  source: string,
   relPath: string,
   moduleDotted: string,
   endpoints: HttpEndpoint[],
@@ -131,8 +131,8 @@ function walkFunctionDefs(
       const child = node.child(i)!;
       if (child.type === "decorator") {
         decorators.push({
-          simple_name: extractDecoratorName(child, bytes),
-          raw: getNodeText(child, bytes),
+          simple_name: extractDecoratorName(child, source),
+          raw: getNodeText(child, source),
         });
       } else if (child.type === "function_definition") {
         funcNode = child;
@@ -146,11 +146,11 @@ function walkFunctionDefs(
   if (funcNode) {
     const nameNode = getChildByFieldName(funcNode, "name");
     if (nameNode) {
-      const name = getNodeText(nameNode, bytes);
+      const name = getNodeText(nameNode, source);
       const isPrivate = name.startsWith("_");
-      const funcText = getNodeText(funcNode, bytes);
+      const funcText = getNodeText(funcNode, source);
       const isAsync = funcText.trimStart().startsWith("async ");
-      const docstring = extractDocstring(funcNode, bytes);
+      const docstring = extractDocstring(funcNode, source);
       let route: RouteInfo | null = null;
       for (const dec of decorators) {
         route = decoratorToRoute(dec);
@@ -166,13 +166,16 @@ function walkFunctionDefs(
           payload_example: null,
           headers_hint: [],
           suggested_tool_name: suggestToolName(route.method, route.path, name),
+          file_path: relPath,
+          start_line: funcNode.startPosition.row + 1,
+          end_line: funcNode.endPosition.row + 1,
         });
       }
       if (!isPrivate && !route && !isInsideClass(funcNode)) {
         functions.push({
           module: moduleDotted,
           qualname: name,
-          signature: firstLine(funcNode, bytes),
+          signature: firstLine(funcNode, source),
           docstring,
           is_async: isAsync,
           is_public: true,
@@ -187,7 +190,7 @@ function walkFunctionDefs(
   for (let i = 0; i < node.childCount; i++) {
     const child = node.child(i)!;
     if (child === handledInnerFunc) continue;
-    walkFunctionDefs(child, bytes, relPath, moduleDotted, endpoints, functions);
+    walkFunctionDefs(child, source, relPath, moduleDotted, endpoints, functions);
   }
 }
 
@@ -244,7 +247,6 @@ export function parsePythonFile(input: PythonParseInput): PythonParseOutput {
     if (fw.hints.some((h) => input.source.includes(h))) frameworkHits.push(fw.name);
   }
 
-  const bytes = Buffer.from(input.source, "utf-8");
-  walkFunctionDefs(tree.rootNode, bytes, input.relPath, input.module, endpoints, functions);
+  walkFunctionDefs(tree.rootNode, input.source, input.relPath, input.module, endpoints, functions);
   return { endpoints, functions, frameworkHits, parseOk: true };
 }

@@ -1,5 +1,11 @@
 import { sha256 } from "../utils/hash.js";
 import { getApiUrl } from "../config/manager.js";
+import { installationId } from "../backend/trace-forwarder.js";
+
+function telemetryDisabled(): boolean {
+  const v = process.env.SYNAPSE_TELEMETRY;
+  return v === "0" || v === "false";
+}
 
 export interface QuotaInfo {
   mcpServersCount: number;
@@ -18,9 +24,13 @@ export async function trackEvent(
   toolCount = 0,
   candidateCount = 0,
   durationMs = 0,
+  mode: "hosted" | "local" = "hosted",
 ): Promise<void> {
   try {
-    if (!apiKey) return;
+    if (telemetryDisabled()) return;
+    // In hosted mode we require an API key so events are attributed. In local
+    // mode we send anonymously via installation_id.
+    if (mode === "hosted" && !apiKey) return;
 
     const apiUrl = getApiUrl();
     const workingDirHash = workingDir ? sha256(workingDir) : "";
@@ -28,6 +38,8 @@ export async function trackEvent(
     const payload: Record<string, unknown> = {
       event_type: eventType,
       working_dir_hash: workingDirHash,
+      mode,
+      installation_id: installationId(),
     };
     if (linesCount) payload.lines_count = linesCount;
     if (toolCount) payload.tool_count = toolCount;
@@ -39,12 +51,14 @@ export async function trackEvent(
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 3000);
 
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+    };
+    if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
+
     await fetch(`${apiUrl}/telemetry/cli`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
+      headers,
       body,
       signal: controller.signal,
     }).finally(() => clearTimeout(timeout));
@@ -61,6 +75,7 @@ export async function checkQuota(
   apiKey: string,
 ): Promise<[boolean, string]> {
   try {
+    if (telemetryDisabled()) return [false, ""];
     if (!apiKey) return [false, ""];
 
     const apiUrl = getApiUrl();
@@ -85,6 +100,7 @@ export async function getQuotaInfo(
   apiKey: string,
 ): Promise<QuotaInfo | null> {
   try {
+    if (telemetryDisabled()) return null;
     if (!apiKey) return null;
 
     const apiUrl = getApiUrl();

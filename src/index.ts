@@ -86,9 +86,22 @@ program
   .command("init")
   .description("Initialize Synapse in the current directory")
   .option("--force", "Force re-initialization")
+  .option(
+    "--local",
+    "Initialize in local mode. Uses your Anthropic key (via ANTHROPIC_API_KEY " +
+      "or --anthropic-key) for codegen. No hosted quota, no code upload.",
+  )
+  .option(
+    "--anthropic-key <key>",
+    "Anthropic API key for --local mode. Env var ANTHROPIC_API_KEY works too.",
+  )
   .action(async (opts) => {
     const { runInit } = await import("./commands/init.js");
-    await runInit(opts.force ?? false);
+    await runInit({
+      force: opts.force ?? false,
+      local: opts.local ?? false,
+      anthropicKey: opts.anthropicKey,
+    });
   });
 
 program
@@ -115,9 +128,21 @@ program
   .option("--custom", "v2: force Custom track (compose internal functions)")
   .option("--base-url <url>", "v2 auto: deployed base URL for the API")
   .option("--server-name <name>", "v2 auto: name for the created MCP server")
+  .option(
+    "--smart-names",
+    "v2 auto: read handler source (+ README/docs) to name/describe tools from real " +
+      "behavior instead of route + docstring alone. Local runs it via your Anthropic " +
+      "key; hosted runs it server-side.",
+  )
   .option("--resume", "v2: resume the most recent unfinished discover session for this repo")
   .option("--max-time <minutes>", "v2: soft wall-clock cap in minutes (default 15)")
   .option("--deep", "v2 custom: raise candidate cap from 200 to 500 during classification")
+  .option(
+    "--local",
+    "One-shot override: run this build locally with your Anthropic key. " +
+      "Uses ANTHROPIC_API_KEY env or --anthropic-key. Doesn't change the project's stored mode.",
+  )
+  .option("--anthropic-key <key>", "Anthropic API key for --local mode.")
   .action(async (opts) => {
     if (opts.engine === "v2") {
       const { runBuildV2 } = await import("./commands/v2/build-v2.js");
@@ -128,9 +153,12 @@ program
         query: opts.query,
         baseUrl: opts.baseUrl,
         serverName: opts.serverName,
+        smartNames: opts.smartNames ?? false,
         resume: opts.resume ?? false,
         maxTimeMinutes: Number.isFinite(maxTimeMinutes) ? (maxTimeMinutes as number) : undefined,
         deep: opts.deep ?? false,
+        local: opts.local ?? false,
+        anthropicKey: opts.anthropicKey,
       });
       return;
     }
@@ -141,6 +169,8 @@ program
       validate: opts.validate,
       docs: opts.docs,
       generateOnly: opts.generate ?? false,
+      local: opts.local ?? false,
+      anthropicKey: opts.anthropicKey,
     });
   });
 
