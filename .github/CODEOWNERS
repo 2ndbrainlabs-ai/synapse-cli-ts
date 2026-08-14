@@ -1,0 +1,11 @@
+# Global fallback — @yeseswisree must review everything
+* @yeseswisree
+
+# Source code
+src/** @yeseswisree
+
+# Protobuf definitions
+protos/** @yeseswisree
+
+# CI and GitHub config
+.github/** @yeseswisree

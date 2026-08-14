@@ -1,0 +1,87 @@
+# ── Type (red/orange family) ─────────────────────────────────────────────────
+- name: bug
+  color: "d73a4a"
+  description: Something isn't working
+
+- name: feature
+  color: "e4652d"
+  description: New feature or request
+
+- name: docs
+  color: "f4a261"
+  description: Improvements or additions to documentation
+
+- name: question
+  color: "f9c784"
+  description: Further information is requested
+
+- name: security
+  color: "b91c1c"
+  description: Security vulnerability or concern
+
+# ── Priority (yellow family) ─────────────────────────────────────────────────
+- name: "priority: critical"
+  color: "fbbf24"
+  description: Must fix immediately — blocks release or breaks prod
+
+- name: "priority: high"
+  color: "fcd34d"
+  description: Important, should be addressed soon
+
+- name: "priority: low"
+  color: "fef08a"
+  description: Nice to have, no urgency
+
+# ── Status (blue family) ─────────────────────────────────────────────────────
+- name: triage
+  color: "93c5fd"
+  description: Needs review and classification (default on new issues)
+
+- name: confirmed
+  color: "3b82f6"
+  description: Issue is confirmed and ready to work on
+
+- name: help-wanted
+  color: "1d4ed8"
+  description: Extra attention is needed — open for contributors
+
+- name: good-first-issue
+  color: "60a5fa"
+  description: Good for newcomers
+
+- name: blocked
+  color: "1e40af"
+  description: Blocked by another issue or external dependency
+
+- name: wontfix
+  color: "bfdbfe"
+  description: This will not be worked on
+
+- name: duplicate
+  color: "dbeafe"
+  description: This issue or PR already exists
+
+# ── Area (green family) ──────────────────────────────────────────────────────
+- name: "area: extractor"
+  color: "16a34a"
+  description: Code extraction and parsing logic
+
+- name: "area: auto-mode"
+  color: "22c55e"
+  description: Auto endpoint generation mode
+
+- name: "area: custom-mode"
+  color: "4ade80"
+  description: Custom endpoint configuration mode
+
+- name: "area: local-mode"
+  color: "86efac"
+  description: Local mode (no remote API)
+
+- name: "area: docs"
+  color: "bbf7d0"
+  description: Documentation area
+
+- name: "area: ci"
+  color: "dcfce7"
+  description: CI/CD pipeline and GitHub Actions
