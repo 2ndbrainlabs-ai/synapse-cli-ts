@@ -12,6 +12,7 @@ Turn any codebase into a production-ready [Model Context Protocol](https://model
 [![node](https://img.shields.io/node/v/@2ndbrainlabs-ai/synapse-cli.svg?logo=node.js)](https://nodejs.org)
 [![license](https://img.shields.io/badge/License-Apache_2.0-green.svg)](./LICENSE)
 [![downloads](https://img.shields.io/npm/dm/@2ndbrainlabs-ai/synapse-cli.svg?color=blue)](https://www.npmjs.com/package/@2ndbrainlabs-ai/synapse-cli)
+[![CI](https://github.com/2ndbrainlabs-ai/synapse-cli/actions/workflows/ci.yml/badge.svg)](https://github.com/2ndbrainlabs-ai/synapse-cli/actions/workflows/ci.yml)
 
 </div>
 
@@ -161,6 +162,14 @@ Please review our [Security Policy](./SECURITY.md) before reporting vulnerabilit
 ## License
 
 Licensed under the [Apache License, Version 2.0](./LICENSE). See [NOTICE](./NOTICE) for attribution.
+
+---
+
+## Star History
+
+<a href="https://star-history.com/#2ndbrainlabs-ai/synapse-cli&Date">
+  <img src="https://api.star-history.com/svg?repos=2ndbrainlabs-ai/synapse-cli&type=Date" alt="Star History Chart" width="600" />
+</a>
 
 ---
 
