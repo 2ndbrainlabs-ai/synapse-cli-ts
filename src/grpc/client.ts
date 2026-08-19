@@ -1072,7 +1072,9 @@ export class SynapseClient {
       return { success: false, names: [], error: "Missing API key.", sessionId };
     }
 
-    const MAX_ATTEMPTS = 3;
+    // 2 attempts, not 3 — see the timeout comment in _nameEndpointsOnce.
+    // Worst case (backend never answers) this is ~24s total, not minutes.
+    const MAX_ATTEMPTS = 2;
     let lastResult: any = null;
 
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -1130,7 +1132,13 @@ export class SynapseClient {
     const metadata = new grpc.Metadata();
     metadata.set("x-api-key", apiKey);
 
-    const timeoutMs = opts.timeoutMs ?? 60_000;
+    // A single small, forced-tool-use Haiku call over 1-30 endpoints should
+    // resolve in a couple of seconds. This is intentionally much tighter
+    // than classifyCandidates' 60s (which can legitimately run several
+    // Haiku shards) — if the backend doesn't recognize name_request at all
+    // (e.g. not deployed yet), we want to fail fast and fall back to
+    // mechanical names, not sit for a minute per attempt.
+    const timeoutMs = opts.timeoutMs ?? 12_000;
 
     return new Promise((resolve) => {
       const call = client.Build(metadata);

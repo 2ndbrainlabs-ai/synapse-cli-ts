@@ -2,7 +2,9 @@
 
 <img src="./docs/logo.png" alt="Synapse" width="360" />
 
-### Agentic MCP server generator
+### Enterprise Context Engine
+
+**Today: MCP Servers. Tomorrow: Every Context Surface Your Stack Needs.**
 
 Turn any codebase into a production-ready [Model Context Protocol](https://modelcontextprotocol.io) server — from your terminal, in seconds.
 
@@ -18,6 +20,8 @@ Turn any codebase into a production-ready [Model Context Protocol](https://model
 ---
 
 ## What is Synapse?
+
+Synapse is building the context layer enterprises need to make their internal systems agent-ready. Today, we're open-sourcing the first piece of that vision: an agentic MCP server generator that analyzes existing codebases and generates production-ready MCP servers.
 
 Synapse is a CLI that reads your codebase and generates a runnable MCP server — the tool schemas, argument marshalling, and boilerplate are all handled for you. Point it at a project, describe what you want exposed, and drop the resulting server into Claude Desktop, Cursor, or any MCP-compatible client.
 

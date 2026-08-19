@@ -13,6 +13,16 @@ import type { SurfaceManifest, SupportedLanguage } from "./surface-manifest.js";
 import { extractPythonSurface } from "../languages/python.js";
 import { extractPythonSurfaceStreamed } from "../languages/python-streamed.js";
 import type { SessionManager } from "../../session/session-manager.js";
+import { extractTypescriptSurface } from "../languages/typescript-parse.js";
+import { extractJavaSurface } from "../languages/java-parse.js";
+import { extractCsharpSurface } from "../languages/csharp-parse.js";
+import { extractGoSurface } from "../languages/go-parse.js";
+import { extractRustSurface } from "../languages/rust-parse.js";
+import { extractTypescriptSurfaceStreamed } from "../languages/typescript-streamed.js";
+import { extractJavaSurfaceStreamed } from "../languages/java-streamed.js";
+import { extractCsharpSurfaceStreamed } from "../languages/csharp-streamed.js";
+import { extractGoSurfaceStreamed } from "../languages/go-streamed.js";
+import { extractRustSurfaceStreamed } from "../languages/rust-streamed.js";
 
 interface LanguageDetector {
   language: SupportedLanguage;
@@ -20,7 +30,7 @@ interface LanguageDetector {
   root_markers?: string[];
   /** File extension counted across the tree — highest count wins ties. */
   extension: string;
-  run: (opts: { workingDir: string }) => SurfaceManifest;
+  run: (opts: { workingDir: string }) => SurfaceManifest | Promise<SurfaceManifest>;
 }
 
 const LANGUAGE_DETECTORS: LanguageDetector[] = [
@@ -30,7 +40,36 @@ const LANGUAGE_DETECTORS: LanguageDetector[] = [
     extension: ".py",
     run: extractPythonSurface,
   },
-  // M2+: typescript, java, csharp, go, rust
+  {
+    language: "typescript" as const,
+    root_markers: ["tsconfig.json", "tsconfig.base.json"],
+    extension: ".ts",
+    run: extractTypescriptSurface,
+  },
+  {
+    language: "java" as const,
+    root_markers: ["pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle"],
+    extension: ".java",
+    run: extractJavaSurface,
+  },
+  {
+    language: "csharp" as const,
+    root_markers: [],
+    extension: ".cs",
+    run: extractCsharpSurface,
+  },
+  {
+    language: "go" as const,
+    root_markers: ["go.mod"],
+    extension: ".go",
+    run: extractGoSurface,
+  },
+  {
+    language: "rust" as const,
+    root_markers: ["Cargo.toml"],
+    extension: ".rs",
+    run: extractRustSurface,
+  },
 ];
 
 export interface ExtractOptions {
@@ -39,7 +78,7 @@ export interface ExtractOptions {
   language?: SupportedLanguage;
 }
 
-export function extractSurface(opts: ExtractOptions): SurfaceManifest {
+export async function extractSurface(opts: ExtractOptions): Promise<SurfaceManifest> {
   const workingDir = path.resolve(opts.workingDir);
   const language = opts.language ?? detectLanguage(workingDir);
   const detector = LANGUAGE_DETECTORS.find((d) => d.language === language);
@@ -48,7 +87,7 @@ export function extractSurface(opts: ExtractOptions): SurfaceManifest {
       `Synapse v2 does not yet support ${language}. Supported: ${LANGUAGE_DETECTORS.map((d) => d.language).join(", ")}`,
     );
   }
-  return detector.run({ workingDir });
+  return await detector.run({ workingDir });
 }
 
 // -----------------------------------------------------------------------------
@@ -70,12 +109,20 @@ export async function extractSurfaceStreamed(
   const workingDir = path.resolve(opts.workingDir);
   const language = opts.language ?? detectLanguage(workingDir);
   if (language !== "python") {
-    // Fall back to the sync path for non-Python — no prefilter available yet.
+    const streamedMap: Partial<Record<string, (o: { workingDir: string; session: SessionManager; captureFunctions?: boolean }) => Promise<SurfaceManifest>>> = {
+      typescript: extractTypescriptSurfaceStreamed,
+      java: extractJavaSurfaceStreamed,
+      csharp: extractCsharpSurfaceStreamed,
+      go: extractGoSurfaceStreamed,
+      rust: extractRustSurfaceStreamed,
+    };
+    const fn = streamedMap[language];
+    if (fn) {
+      return fn({ workingDir, session: opts.session, captureFunctions: opts.captureFunctions });
+    }
     const detector = LANGUAGE_DETECTORS.find((d) => d.language === language);
     if (!detector) {
-      throw new Error(
-        `Synapse v2 does not yet support ${language} in streamed mode.`,
-      );
+      throw new Error(`Synapse v2 does not yet support ${language}.`);
     }
     return detector.run({ workingDir });
   }

@@ -34,15 +34,6 @@ export interface LocalAutoFlowOptions {
 export async function runLocalAutoFlow(opts: LocalAutoFlowOptions): Promise<void> {
   const endpoints = opts.manifest.endpoints;
 
-  if (opts.manifest.language !== "python") {
-    roundedBox("Local Auto Mode: Python Only", "✖", t.err, [
-      `Local mode generates Python MCP servers only (detected ${opts.manifest.language}).`,
-      "",
-      `Re-run without ${t.cmd("--local")} for the hosted service, which supports more languages.`,
-    ]);
-    return;
-  }
-
   if (endpoints.length === 0) {
     roundedBox("No Endpoints Found", "⚠", t.warn, [
       "The extractor didn't find any HTTP route decorators.",
@@ -77,7 +68,33 @@ export async function runLocalAutoFlow(opts: LocalAutoFlowOptions): Promise<void
 
   sectionHeader("Generating", "⚡");
 
+  // Smart naming runs for all languages — it reads handler source and calls
+  // the model regardless of language. The generated *server file* is still
+  // Python-only for now; non-Python repos get the naming pass + a note.
   const named = await maybeNameEndpoints(selected, opts);
+
+  const lang = opts.manifest.language;
+  if (lang !== "python") {
+    // Show the named endpoint list so the user can see what was inferred,
+    // then explain that local file generation requires --local without the
+    // Python-only restriction lifted (hosted path handles all languages).
+    stepInfo(
+      "Smart naming complete",
+      `${named.length} tool(s) named from ${lang} source`,
+    );
+    roundedBox("Server file generation: Python only for --local", "ℹ", t.warn, [
+      `Smart naming ran on your ${lang} endpoints above.`,
+      "",
+      "Local server file generation currently writes Python only.",
+      `Re-run without ${t.cmd("--local")} to push the named config to the`,
+      "hosted backend, which serves all languages via the MCP runner.",
+      "",
+      "Named tools (will be available once hosted or once TypeScript/Go",
+      "server generation is added):",
+      ...named.map((ep) => `  ${ep.method.padEnd(6)} ${ep.path.padEnd(30)} ${ep.suggested_tool_name}`),
+    ]);
+    return;
+  }
 
   const { renderPassthroughPython } = await import("../../backend/server-renderer.js");
   const { source, envVars } = renderPassthroughPython(named, serverName);

@@ -45,18 +45,11 @@ describe("resolveAnthropicKey", () => {
 });
 
 describe("resolveEffectiveMode", () => {
-  it("CLI --local overrides config mode", () => {
-    expect(resolveEffectiveMode("hosted", true)).toBe("local");
-    expect(resolveEffectiveMode("local", true)).toBe("local");
-    expect(resolveEffectiveMode(undefined, true)).toBe("local");
+  it("--local flag returns local", () => {
+    expect(resolveEffectiveMode(true)).toBe("local");
   });
 
-  it("config mode wins when no CLI flag is set", () => {
-    expect(resolveEffectiveMode("local", false)).toBe("local");
-    expect(resolveEffectiveMode("hosted", false)).toBe("hosted");
-  });
-
-  it("defaults to hosted when config is missing and no flag", () => {
-    expect(resolveEffectiveMode(undefined, false)).toBe("hosted");
+  it("no flag returns hosted", () => {
+    expect(resolveEffectiveMode(false)).toBe("hosted");
   });
 });

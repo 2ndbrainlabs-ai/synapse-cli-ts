@@ -29,14 +29,64 @@ const PY: NeedleSet = {
   callable: ["def ", "async def ", "class "],
 };
 
-// Reserved slots for future language packs. Empty needle lists mean the
-// prefilter still runs (and drops everything) until a real pack is filled in.
-const TS: NeedleSet = { route: [], callable: [] };
-const JS: NeedleSet = { route: [], callable: [] };
-const JAVA: NeedleSet = { route: [], callable: [] };
-const CSHARP: NeedleSet = { route: [], callable: [] };
-const GO: NeedleSet = { route: [], callable: [] };
-const RUST: NeedleSet = { route: [], callable: [] };
+const TS: NeedleSet = {
+  route: [
+    ".get(", ".post(", ".put(", ".patch(", ".delete(",
+    "router.get", "router.post", "router.put", "router.patch", "router.delete",
+    "app.get(", "app.post(", "app.put(", "app.patch(", "app.delete(",
+    "server.route(", ".route(",
+    "@Get(", "@Post(", "@Put(", "@Patch(", "@Delete(",
+    "@Controller(", "@Controller()",
+    "NextApiRequest", "NextApiResponse",
+  ],
+  callable: ["export function", "export async function", "export class", "export const"],
+};
+const JS: NeedleSet = {
+  route: [
+    ".get(", ".post(", ".put(", ".patch(", ".delete(",
+    "router.get", "app.get(", "app.post(", "server.route(", ".route(",
+  ],
+  callable: ["module.exports", "exports.", "function ", "const "],
+};
+const JAVA: NeedleSet = {
+  route: [
+    "@GetMapping", "@PostMapping", "@PutMapping", "@PatchMapping", "@DeleteMapping",
+    "@RequestMapping", "@GET", "@POST", "@PUT", "@PATCH", "@DELETE",
+    "@Path(", "@Get(", "@Post(", "@Put(", "@Delete(",
+    "router.get(", "router.post(",
+  ],
+  callable: ["public ", "protected ", "ResponseEntity"],
+};
+const CSHARP: NeedleSet = {
+  route: [
+    "[HttpGet", "[HttpPost", "[HttpPut", "[HttpPatch", "[HttpDelete",
+    "[Route(", "[ApiController",
+    "MapGet(", "MapPost(", "MapPut(", "MapPatch(", "MapDelete(",
+    "app.Map", "endpoints.Map",
+  ],
+  callable: ["public ", "static ", "async Task", "IActionResult"],
+};
+const GO: NeedleSet = {
+  route: [
+    "r.GET(", "r.POST(", "r.PUT(", "r.PATCH(", "r.DELETE(",
+    "router.GET(", "router.POST(", "engine.GET(",
+    "e.GET(", "e.POST(", "g.GET(", "g.POST(",
+    "r.Get(", "r.Post(", "app.Get(", "app.Post(",
+    "http.HandleFunc(", "http.Handle(",
+    "mux.HandleFunc(", "mux.Handle(", ".HandleFunc(",
+    "beego.Router(",
+  ],
+  callable: ["func ", "func("],
+};
+const RUST: NeedleSet = {
+  route: [
+    "#[get(", "#[post(", "#[put(", "#[patch(", "#[delete(", "#[route(",
+    "web::get()", "web::post()", ".route(\"",
+    "Router::new()", "#[handler]", "warp::path(",
+    "#[actix_web::get", "#[actix_web::post",
+  ],
+  callable: ["pub fn ", "pub async fn ", "fn ", "async fn "],
+};
 
 export const NEEDLE_TABLE: Record<SupportedLanguage, NeedleSet> = {
   python: PY,
