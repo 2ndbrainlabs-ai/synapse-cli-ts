@@ -282,5 +282,25 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
   } finally {
     session.dispose();
   }
+
+  // Fire-and-forget telemetry — records the v2 build event that was previously
+  // never sent (only the legacy v1 build.ts emitted trackEvent).
+  try {
+    const { trackEvent } = await import("../../grpc/telemetry.js");
+    const endpointCount = manifest.endpoints.length;
+    const functionCount = manifest.functions.length;
+    trackEvent(
+      "build",
+      apiKey,
+      workingDir,
+      /* linesCount */ 0,
+      /* toolCount */ endpointCount + functionCount,
+      /* candidateCount */ functionCount,
+      /* durationMs */ Date.now() - Date.now(), // session tracks wall-clock separately
+      effectiveMode,
+    ).catch(() => {});
+  } catch {
+    // Telemetry is never allowed to break the build
+  }
   void apiKey;
 }
