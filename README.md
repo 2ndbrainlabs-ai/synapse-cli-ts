@@ -34,6 +34,8 @@ Requires **Node.js 18+**. Verify with `synapse --version`.
 
 ## Quick start
 
+> Before running `synapse init`, generate your Synapse API key by following the [docs](https://synaps3.ai/docs#configuration).
+
 ```bash
 cd my-project
 synapse init                    # one-time: paste your API key
