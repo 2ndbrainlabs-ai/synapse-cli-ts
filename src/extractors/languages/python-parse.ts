@@ -90,6 +90,122 @@ function firstLine(node: TreeSitter.SyntaxNode, source: string): string {
   return getNodeText(node, source).split("\n", 1)[0].trim();
 }
 
+// -----------------------------------------------------------------------------
+// FastAPI / Flask body parameter extraction
+//
+// FastAPI route handlers declare request body as a Pydantic BaseModel parameter:
+//   async def create_patient(body: PatientCreate): ...
+// The extractor finds the route but sets payload_example: null because it doesn't
+// inspect function parameters. This function:
+//   1. Extracts function parameter names + type annotations from the signature
+//   2. Identifies which params are body models (not path params, not Request/Response)
+//   3. Looks up the Pydantic model class in the same source and extracts fields
+//   4. Returns a payload_example dict with field → example-value entries
+// -----------------------------------------------------------------------------
+
+/** Primitive / framework types that are NOT body model params. */
+const NON_BODY_TYPES = new Set([
+  "Request", "Response", "BackgroundTasks", "Depends", "Header", "Query",
+  "Path", "Cookie", "Form", "File", "UploadFile", "HTTPException",
+  "str", "int", "float", "bool", "None", "Optional", "List", "Dict",
+  "Any", "datetime", "date", "UUID",
+]);
+
+/** Extract {field: exampleValue} from a Pydantic BaseModel class in the source. */
+function extractModelFields(modelName: string, source: string): Record<string, unknown> | null {
+  // Find: class ModelName(BaseModel):
+  const classRe = new RegExp(`class\\s+${modelName}\\s*\\([^)]*\\)\\s*:([\\s\\S]*?)(?=\\nclass\\s|\\nasync def\\s|\\ndef\\s|$)`);
+  const classMatch = source.match(classRe);
+  if (!classMatch) return null;
+
+  const body = classMatch[1];
+  const fields: Record<string, unknown> = {};
+
+  // Match field declarations: field_name: type (= default)?
+  const fieldRe = /^\s{4}(\w+)\s*:\s*([\w\[\]|, ]+?)(?:\s*=\s*(.+?))?$/gm;
+  let m: RegExpExecArray | null;
+  while ((m = fieldRe.exec(body)) !== null) {
+    const fieldName = m[1];
+    const fieldType = m[2].trim();
+    const defaultVal = m[3]?.trim();
+    if (fieldName.startsWith("_")) continue;
+
+    // Skip ClassVar, model_config etc.
+    if (fieldType.includes("ClassVar") || fieldName === "model_config") continue;
+
+    // Provide a type-appropriate example value
+    if (defaultVal && defaultVal !== "..." && !defaultVal.startsWith("Field(")) {
+      // Use the actual default if it's a literal
+      if (defaultVal === "None") {
+        fields[fieldName] = null;
+      } else if (defaultVal.match(/^["']/)) {
+        fields[fieldName] = defaultVal.slice(1, -1);
+      } else if (defaultVal.match(/^\d+\.?\d*$/)) {
+        fields[fieldName] = Number(defaultVal);
+      } else if (defaultVal === "True") {
+        fields[fieldName] = true;
+      } else if (defaultVal === "False") {
+        fields[fieldName] = false;
+      } else {
+        fields[fieldName] = fieldType.includes("int") ? 0 : "";
+      }
+    } else {
+      // Generate example from type
+      if (fieldType.includes("int")) fields[fieldName] = 0;
+      else if (fieldType.includes("float")) fields[fieldName] = 0.0;
+      else if (fieldType.includes("bool")) fields[fieldName] = false;
+      else if (fieldType.includes("list") || fieldType.includes("List")) fields[fieldName] = [];
+      else if (fieldType.includes("dict") || fieldType.includes("Dict")) fields[fieldName] = {};
+      else fields[fieldName] = "";
+    }
+  }
+
+  return Object.keys(fields).length > 0 ? fields : null;
+}
+
+/**
+ * For a FastAPI route handler, extract the request body payload example.
+ * Parses the function parameter list, finds Pydantic model params,
+ * and recursively extracts their fields from the source.
+ */
+function extractPayloadExample(
+  funcNode: TreeSitter.SyntaxNode,
+  source: string,
+  routePath: string,
+  method: HttpMethod,
+): Record<string, unknown> | null {
+  // Only POST, PUT, PATCH typically have a body
+  if (method === "GET" || method === "DELETE") return null;
+
+  const funcText = getNodeText(funcNode, source);
+  // Extract the params section: everything between first ( and )
+  const sigMatch = funcText.match(/(?:async\s+)?def\s+\w+\s*\(([^)]*)\)/s);
+  if (!sigMatch) return null;
+
+  const sigText = sigMatch[1];
+  // Extract path param names from the route path to exclude them
+  const pathParams = new Set([...routePath.matchAll(/\{(\w+)\}/g)].map(m => m[1]));
+
+  // Parse each param: name: Type or name: Type = default
+  const paramRe = /(\w+)\s*:\s*([^\s,=]+)/g;
+  let pm: RegExpExecArray | null;
+  while ((pm = paramRe.exec(sigText)) !== null) {
+    const paramName = pm[1];
+    const paramType = pm[2].replace(/Optional\[([^\]]+)\]/, "$1").trim();
+
+    // Skip self, path params, and known non-body types
+    if (paramName === "self" || pathParams.has(paramName)) continue;
+    if (NON_BODY_TYPES.has(paramType)) continue;
+    if (paramType.startsWith("Annotated")) continue;
+
+    // This looks like a Pydantic model — try to extract its fields
+    const fields = extractModelFields(paramType, source);
+    if (fields) return fields;
+  }
+
+  return null;
+}
+
 function suggestToolName(method: HttpMethod, routePath: string, handlerName: string): string {
   const generic = new Set(["handler", "handle", "index", "root", "endpoint", "view", "func"]);
   if (!generic.has(handlerName.toLowerCase())) return handlerName.slice(0, 60);
@@ -163,7 +279,7 @@ function walkFunctionDefs(
           handler_module: moduleDotted,
           handler_qualname: name,
           description: docstring,
-          payload_example: null,
+          payload_example: extractPayloadExample(funcNode, source, route.path, route.method),
           headers_hint: [],
           suggested_tool_name: suggestToolName(route.method, route.path, name),
           file_path: relPath,
