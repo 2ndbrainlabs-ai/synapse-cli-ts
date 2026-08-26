@@ -179,7 +179,7 @@ function walkClassNode(
       });
     } else {
       // Capture public methods as functions
-      const mods = extractAnnotations(member, source).map((a) => a.name);
+      const _mods = extractAnnotations(member, source).map((a) => a.name);
       const raw = getNodeText(member, source);
       if (raw.includes("public ")) {
         let handlerName = "";

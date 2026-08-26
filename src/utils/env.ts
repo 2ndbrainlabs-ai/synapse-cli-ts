@@ -2,7 +2,6 @@
 // This module provides helpers for .env file manipulation
 
 import fs from "node:fs";
-import path from "node:path";
 
 export function readDotenv(dotenvPath: string): Record<string, string> {
   if (!fs.existsSync(dotenvPath)) return {};
