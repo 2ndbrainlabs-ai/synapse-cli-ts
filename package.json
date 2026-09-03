@@ -1,7 +1,7 @@
 {
   "name": "@2ndbrainlabs-ai/synapse-cli",
-  "version": "0.1.4-re-2",
-  "description": "Agentic MCP server generator \u2014 the first piece of Synapse's Enterprise Context Engine",
+  "version": "0.1.5",
+  "description": "Agentic MCP server generator — the first piece of Synapse's Enterprise Context Engine",
   "homepage": "https://synaps3.ai",
   "repository": {
     "type": "git",
