@@ -6,6 +6,8 @@
 
 import { SynapseClient } from "./client.js";
 import { LocalSynapseClient } from "../backend/index.js";
+import { createProvider } from "../providers/index.js";
+import type { ResolvedLlm } from "../config/llm-config.js";
 import type { CustomBuildResult, ClassifyResult, NameEndpointsResult } from "../backend/index.js";
 import type { EndpointContext } from "../backend/endpoint-namer.js";
 
@@ -54,20 +56,36 @@ export interface ISynapseClient {
 export interface FactoryOpts {
   effectiveMode: EffectiveMode;
   workingDir?: string;
-  /** Required when effectiveMode === "local". */
-  anthropicKey?: string;
+  /**
+   * Required when effectiveMode === "local" — which provider and models local
+   * codegen runs on. Produced by resolveLlm() in config/llm-config.ts.
+   */
+  llm?: ResolvedLlm;
 }
 
 export function makeSynapseClient(opts: FactoryOpts): ISynapseClient {
   if (opts.effectiveMode === "local") {
-    if (!opts.anthropicKey) {
+    const llm = opts.llm;
+    if (!llm) {
       throw new Error(
-        "Local mode requires an Anthropic API key. " +
-          "Set ANTHROPIC_API_KEY or pass --anthropic-key.",
+        "Local mode requires an LLM provider configuration. " +
+          "Run `synapse model` to check it.",
       );
     }
+    if (llm.problems.length > 0) {
+      throw new Error(llm.problems.join("\n"));
+    }
     return new LocalSynapseClient({
-      anthropicKey: opts.anthropicKey,
+      provider: createProvider({
+        providerId: llm.providerId,
+        label: llm.label,
+        kind: llm.spec.kind,
+        baseUrl: llm.baseUrl,
+        apiKey: llm.apiKey,
+        models: llm.models,
+        caps: llm.caps,
+        headers: llm.headers,
+      }),
       workingDir: opts.workingDir,
     }) as unknown as ISynapseClient;
   }

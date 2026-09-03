@@ -4,6 +4,7 @@
 // Also exports JSON Schemas for Anthropic tool_use.
 
 import { z } from "zod";
+import type { LlmTool } from "../providers/types.js";
 
 // -----------------------------------------------------------------------------
 // ToolPlan — emitted by shape_tool
@@ -43,13 +44,13 @@ export const TOOL_PLAN_JSON_SCHEMA = {
   },
 };
 
-export const EMIT_TOOL_PLAN_TOOL = {
+export const EMIT_TOOL_PLAN_TOOL: LlmTool = {
   name: "emit_tool_plan",
   description:
     "Emit exactly one MCP tool composed from functions listed in the " +
     "SurfaceManifest. Every function call in body_source MUST resolve to " +
     "a manifest entry — no inline helpers, no invented functions.",
-  input_schema: TOOL_PLAN_JSON_SCHEMA,
+  parameters: TOOL_PLAN_JSON_SCHEMA,
 };
 
 export function paramsSignature(plan: ToolPlan): string {
@@ -87,13 +88,13 @@ export const FunctionVerdictSchema = z.object({
 
 export type FunctionVerdict = z.infer<typeof FunctionVerdictSchema>;
 
-export const EMIT_SHARD_VERDICTS_TOOL = {
+export const EMIT_SHARD_VERDICTS_TOOL: LlmTool = {
   name: "emit_shard_verdicts",
   description:
     "Emit one verdict per function in the batch. Every function passed in " +
     "MUST appear exactly once in verdicts. Skip nothing — use band=SKIP " +
     "when the function is unsuitable rather than omitting it.",
-  input_schema: {
+  parameters: {
     type: "object" as const,
     required: ["verdicts"],
     properties: {
@@ -130,12 +131,12 @@ export const EndpointNameSchema = z.object({
 
 export type EndpointName = z.infer<typeof EndpointNameSchema>;
 
-export const EMIT_ENDPOINT_NAMES_TOOL = {
+export const EMIT_ENDPOINT_NAMES_TOOL: LlmTool = {
   name: "emit_endpoint_names",
   description:
     "Emit one entry per endpoint in the batch. Every index passed in MUST " +
     "appear exactly once in names. Skip nothing.",
-  input_schema: {
+  parameters: {
     type: "object" as const,
     required: ["names"],
     properties: {
@@ -176,12 +177,12 @@ export const WorkflowProposalSchema = z.object({
 
 export type WorkflowProposal = z.infer<typeof WorkflowProposalSchema>;
 
-export const EMIT_WORKFLOW_PROPOSALS_TOOL = {
+export const EMIT_WORKFLOW_PROPOSALS_TOOL: LlmTool = {
   name: "emit_workflow_proposals",
   description:
     "Emit 1-5 workflow proposals. Each proposal stitches 2+ HIGH/MEDIUM " +
     "functions from the manifest into a coherent, user-facing capability.",
-  input_schema: {
+  parameters: {
     type: "object" as const,
     required: ["proposals"],
     properties: {
@@ -219,10 +220,10 @@ export const EMIT_WORKFLOW_PROPOSALS_TOOL = {
 export const PatchedFileSchema = z.object({ source: z.string() });
 export type PatchedFile = z.infer<typeof PatchedFileSchema>;
 
-export const PATCHED_FILE_TOOL = {
+export const PATCHED_FILE_TOOL: LlmTool = {
   name: "patched_file",
   description: "Emit the complete corrected MCP server file as one string.",
-  input_schema: {
+  parameters: {
     type: "object" as const,
     required: ["source"],
     properties: { source: { type: "string" } },

@@ -246,27 +246,11 @@ export function getApiUrl(): string {
 
 // -----------------------------------------------------------------------------
 // --local mode helpers
+//
+// Provider and key resolution for local mode lives in config/llm-config.ts —
+// it has to consider six providers, stored config and per-stage models, not
+// just one env var.
 // -----------------------------------------------------------------------------
-
-/**
- * Resolve the Anthropic API key for --local mode.
- *
- * Precedence:
- *   1. Explicit --anthropic-key flag value passed in by the caller
- *   2. ANTHROPIC_API_KEY env var
- *   3. null — the caller must show the "please export the key" message
- *
- * The Anthropic key is NEVER stored on disk in any form. This helper is the
- * single place that produces it; callers pass it to the LocalSynapseClient
- * constructor and let it fall out of scope after use.
- */
-export function resolveAnthropicKey(cliFlagValue?: string | null): string | null {
-  const fromFlag = (cliFlagValue ?? "").trim();
-  if (fromFlag) return fromFlag;
-  const fromEnv = (process.env.ANTHROPIC_API_KEY ?? "").trim();
-  if (fromEnv) return fromEnv;
-  return null;
-}
 
 /**
  * Compute the effective execution mode.

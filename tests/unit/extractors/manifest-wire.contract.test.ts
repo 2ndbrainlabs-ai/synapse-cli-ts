@@ -50,6 +50,9 @@ function makeManifest(): SurfaceManifest {
         payload_example: null,
         headers_hint: [],
         suggested_tool_name: "get_x",
+        file_path: "app/routes.py",
+        start_line: 12,
+        end_line: 18,
       },
     ],
     functions: [

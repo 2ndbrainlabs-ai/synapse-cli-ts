@@ -20,8 +20,8 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import Anthropic from "@anthropic-ai/sdk";
-import { call, extractToolUse } from "./anthropic-call.js";
+import { callTool } from "./llm-call.js";
+import type { LlmProvider } from "../providers/types.js";
 import { ENDPOINT_NAMER_SYSTEM_PROMPT } from "./prompts.js";
 import { EMIT_ENDPOINT_NAMES_TOOL, EndpointNameSchema } from "./schemas.js";
 import type { HttpEndpoint } from "../extractors/core/surface-manifest.js";
@@ -80,7 +80,7 @@ export function buildEndpointContexts(
  * suggested_tool_name/description.
  */
 export async function nameAndDescribeEndpoints(opts: {
-  client: Anthropic;
+  provider: LlmProvider;
   endpoints: EndpointContext[];
   sessionId: string;
   readmeContext?: string;
@@ -118,8 +118,8 @@ export async function nameAndDescribeEndpoints(opts: {
 
     try {
       opts.onStatus?.("naming", "Reading handlers to name tools", 0.5);
-      const msg = await call({
-        client: opts.client,
+      const raw = await callTool({
+        provider: opts.provider,
         task: "triage",
         sessionId: opts.sessionId,
         system: ENDPOINT_NAMER_SYSTEM_PROMPT,
@@ -129,13 +129,11 @@ export async function nameAndDescribeEndpoints(opts: {
             content: `${readmeBlock}Endpoints:\n${JSON.stringify(payload, null, 2)}`,
           },
         ],
-        tools: [EMIT_ENDPOINT_NAMES_TOOL],
-        toolChoice: { type: "tool", name: "emit_endpoint_names" },
+        tool: EMIT_ENDPOINT_NAMES_TOOL,
         cliVersion: opts.cliVersion,
         installationId: opts.installationId,
       });
 
-      const raw = extractToolUse(msg, "emit_endpoint_names");
       const names = (raw?.names as unknown[]) ?? [];
       for (const entry of names) {
         const parsed = EndpointNameSchema.safeParse(entry);

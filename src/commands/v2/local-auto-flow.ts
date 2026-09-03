@@ -10,6 +10,7 @@
 import path from "node:path";
 import { input } from "@inquirer/prompts";
 import type { HttpEndpoint, SurfaceManifest } from "../../extractors/core/surface-manifest.js";
+import type { ResolvedLlm } from "../../config/llm-config.js";
 import { pickEndpoints } from "./endpoint-picker.js";
 import { writeWithSuffix, mergeEnvExample } from "./custom-flow.js";
 import { t, stepInfo, sectionHeader } from "../../ui/theme.js";
@@ -22,10 +23,10 @@ export interface LocalAutoFlowOptions {
   serverName?: string;
   baseUrl?: string;
   sessionId?: string;
-  /** Anthropic key resolved by build-v2 for --local runs. Required for
+  /** LLM provider resolved by build-v2 for --local runs. Required for
    *  --smart-names to run — naming is skipped (mechanical fallback) if
-   *  either the flag or the key is missing. */
-  anthropicKey?: string | null;
+   *  either the flag or the provider config is missing. */
+  llm?: ResolvedLlm | null;
   /** --smart-names: browse handler source (+ README/docs) to name/describe
    *  tools from real behavior instead of route + docstring alone. */
   smartNames?: boolean;
@@ -150,7 +151,7 @@ async function maybeNameEndpoints(
   endpoints: HttpEndpoint[],
   opts: LocalAutoFlowOptions,
 ): Promise<HttpEndpoint[]> {
-  if (!opts.smartNames || !opts.anthropicKey) return endpoints;
+  if (!opts.smartNames || !opts.llm) return endpoints;
 
   const spinner = new Spinner("orbital");
   spinner.start("Naming tools from handler source");
@@ -162,7 +163,7 @@ async function maybeNameEndpoints(
     const client = makeSynapseClient({
       effectiveMode: "local",
       workingDir: opts.workingDir,
-      anthropicKey: opts.anthropicKey,
+      llm: opts.llm,
     });
     const contexts = buildEndpointContexts(endpoints, opts.workingDir);
     const result = await client.nameEndpoints({

@@ -1,0 +1,16 @@
+{
+  // Typechecks the test suite, which tsconfig.json deliberately excludes so
+  // that `npm run build` emits only src/. Without this, test files are only
+  // ever transpiled (esbuild strips types without checking them), so a test
+  // calling a function with a renamed or removed option compiles and runs
+  // green while asserting nothing.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // rootDir is irrelevant under noEmit; src-only would reject tests/.
+    "rootDir": "."
+  },
+  "include": ["src/**/*", "tests/**/*"],
+  // tests/fixtures/** are parser input read as text, not compiled.
+  "exclude": ["node_modules", "dist", "tests/fixtures"]
+}
