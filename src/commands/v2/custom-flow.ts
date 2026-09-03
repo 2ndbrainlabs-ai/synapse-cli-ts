@@ -21,6 +21,7 @@ import { serializeManifestForWire } from "../../extractors/core/manifest-wire.js
 import { renderErrorBox, ERROR_CODES, parseWireError } from "../../ui/errors.js";
 
 import type { SessionManager } from "../../session/session-manager.js";
+import type { ResolvedLlm } from "../../config/llm-config.js";
 
 export interface CustomFlowOptions {
   workingDir: string;
@@ -37,8 +38,8 @@ export interface CustomFlowOptions {
   session?: SessionManager;
   /** Which client to use — "hosted" (gRPC) or "local" (in-process TS backend). */
   effectiveMode?: "hosted" | "local";
-  /** Anthropic API key for local mode. Ignored when effectiveMode === "hosted". */
-  anthropicKey?: string | null;
+  /** Resolved LLM provider for local mode. Ignored when effectiveMode === "hosted". */
+  llm?: ResolvedLlm | null;
 }
 
 /** Pick between "describe an intent" or "pick functions" — then collect the answer. */
@@ -142,7 +143,7 @@ async function tryDiscoverWorkflows(args: {
   workingDir: string;
   session?: SessionManager;
   effectiveMode?: "hosted" | "local";
-  anthropicKey?: string | null;
+  llm?: ResolvedLlm | null;
 }): Promise<WorkflowProposal[] | null> {
   if (args.manifest.functions.length < 2) return null;
 
@@ -180,7 +181,7 @@ async function tryDiscoverWorkflows(args: {
   const client = makeSynapseClient({
     effectiveMode: args.effectiveMode ?? "hosted",
     workingDir: args.workingDir,
-    anthropicKey: args.anthropicKey ?? undefined,
+    llm: args.llm ?? undefined,
   });
 
   let classify: Awaited<ReturnType<typeof client.classifyCandidates>>;
@@ -419,7 +420,7 @@ export async function runCustomFlow(opts: CustomFlowOptions): Promise<void> {
       workingDir: opts.workingDir,
       session: opts.session,
       effectiveMode: opts.effectiveMode,
-      anthropicKey: opts.anthropicKey,
+      llm: opts.llm,
     });
 
     if (proposals && proposals.length > 0) {
@@ -485,7 +486,7 @@ export async function runCustomFlow(opts: CustomFlowOptions): Promise<void> {
   const client = makeSynapseClient({
     effectiveMode: opts.effectiveMode ?? "hosted",
     workingDir: opts.workingDir,
-    anthropicKey: opts.anthropicKey ?? undefined,
+    llm: opts.llm ?? undefined,
   });
 
   let result;

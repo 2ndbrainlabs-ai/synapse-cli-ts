@@ -8,13 +8,14 @@ import { describe, expect, it } from "vitest";
 import { verifyAndRepair } from "../../../src/backend/smoke-verifier.js";
 import type { SurfaceManifest } from "../../../src/extractors/core/surface-manifest.js";
 
-// Fake anthropic client — should never be invoked on a valid input.
-// If the verifier tries to repair, this throws and the test fails.
-const shouldNotBeCalledClient = {
-  messages: {
-    create: async () => {
-      throw new Error("anthropic should NOT be called on valid input");
-    },
+// Fake provider — should never be invoked on a valid input. If the verifier
+// tries to repair, this throws and the test fails.
+const shouldNotBeCalledProvider = {
+  id: "anthropic",
+  label: "Never",
+  modelFor: () => "never",
+  send: async () => {
+    throw new Error("the provider should NOT be called on valid input");
   },
 } as never;
 
@@ -59,7 +60,7 @@ if __name__ == "__main__":
 describe("verifyAndRepair — happy path", () => {
   it("accepts syntactically valid Python without calling anthropic", async () => {
     const { source, report } = await verifyAndRepair({
-      client: shouldNotBeCalledClient,
+      provider: shouldNotBeCalledProvider,
       source: validSource,
       manifest: fakeManifest(),
       sessionId: "test",
@@ -73,7 +74,7 @@ describe("verifyAndRepair — happy path", () => {
   it("passes third-party imports through the audit (mcp, os, json, ...)", async () => {
     const src = validSource + "\nimport os\nimport json\nfrom typing import Optional\n";
     const { report } = await verifyAndRepair({
-      client: shouldNotBeCalledClient,
+      provider: shouldNotBeCalledProvider,
       source: src,
       manifest: fakeManifest(),
       sessionId: "test",
@@ -84,7 +85,7 @@ describe("verifyAndRepair — happy path", () => {
   it("passes imports from unknown packages that aren't under package_import_root", async () => {
     const src = validSource + "\nfrom requests import Session\n";
     const { report } = await verifyAndRepair({
-      client: shouldNotBeCalledClient,
+      provider: shouldNotBeCalledProvider,
       source: src,
       manifest: fakeManifest(),
       sessionId: "test",
@@ -104,7 +105,7 @@ describe("verifyAndRepair — failure path", () => {
     // The verifier will try to repair; since the fake client throws, the
     // pass-through error path fires and returns a non-ok report.
     const { report } = await verifyAndRepair({
-      client: shouldNotBeCalledClient,
+      provider: shouldNotBeCalledProvider,
       source: src,
       manifest: fakeManifest(),
       sessionId: "test",
@@ -117,7 +118,7 @@ describe("verifyAndRepair — failure path", () => {
   it("flags a syntax error before running the audit", async () => {
     const broken = "def broken(:\n    return 1\n";
     const { report } = await verifyAndRepair({
-      client: shouldNotBeCalledClient,
+      provider: shouldNotBeCalledProvider,
       source: broken,
       manifest: fakeManifest(),
       sessionId: "test",

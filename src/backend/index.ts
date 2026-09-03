@@ -4,10 +4,12 @@
 // Composes classify → shape → render → smoke-verify. Public surface matches
 // the gRPC SynapseClient so callers swap via the client factory (L10).
 //
-// User's Anthropic key comes from the constructor (resolved by the CLI via
-// --anthropic-key flag or ANTHROPIC_API_KEY env — never persisted).
+// The LLM provider is injected, not constructed here: the CLI resolves which
+// provider and models to use (config/llm-config.ts) and builds it
+// (providers/index.ts), so this class is identical whether it is running on
+// Anthropic, OpenAI, Groq, xAI, OpenRouter, Ollama or a self-hosted endpoint.
 
-import Anthropic from "@anthropic-ai/sdk";
+import type { LlmProvider } from "../providers/types.js";
 import { classifyCandidates as classifyImpl } from "./candidate-classifier.js";
 import { shapeTool } from "./tool-shaper.js";
 import { renderPython } from "./server-renderer.js";
@@ -100,18 +102,18 @@ export interface NameEndpointsResult {
 // -----------------------------------------------------------------------------
 
 export class LocalSynapseClient {
-  private client: Anthropic;
+  private provider: LlmProvider;
   private cliVersion: string;
   private installationId: string;
 
-  constructor(opts: { anthropicKey: string; workingDir?: string }) {
-    if (!opts.anthropicKey) {
+  constructor(opts: { provider: LlmProvider; workingDir?: string }) {
+    if (!opts.provider) {
       throw new Error(
-        "LocalSynapseClient requires an Anthropic API key. " +
-          "Set ANTHROPIC_API_KEY or pass --anthropic-key.",
+        "LocalSynapseClient requires an LLM provider. " +
+          "Run `synapse model` to check your configuration.",
       );
     }
-    this.client = new Anthropic({ apiKey: opts.anthropicKey });
+    this.provider = opts.provider;
     void opts.workingDir;
     this.cliVersion = readCliVersion();
     this.installationId = installationId();
@@ -170,7 +172,7 @@ export class LocalSynapseClient {
       // handles both the "selected qualnames" and "narrow with verdicts"
       // paths on its own).
       const plan = await shapeTool({
-        client: this.client,
+        provider: this.provider,
         manifest,
         intent: opts.intent,
         selectedQualnames: opts.selectedQualnames ?? [],
@@ -191,7 +193,7 @@ export class LocalSynapseClient {
 
       // Stage 3: smoke-verify (+ one repair pass on failure)
       const { source, report } = await verifyAndRepair({
-        client: this.client,
+        provider: this.provider,
         source: rendered,
         manifest,
         sessionId,
@@ -263,7 +265,7 @@ export class LocalSynapseClient {
 
     try {
       const result = await classifyImpl({
-        client: this.client,
+        provider: this.provider,
         manifest,
         sessionId,
         shardSize: opts.shardSize,
@@ -323,7 +325,7 @@ export class LocalSynapseClient {
 
     try {
       const map = await nameAndDescribeEndpoints({
-        client: this.client,
+        provider: this.provider,
         endpoints: opts.endpoints,
         sessionId,
         readmeContext: opts.readmeContext,

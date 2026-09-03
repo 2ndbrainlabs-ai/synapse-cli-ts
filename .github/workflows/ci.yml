@@ -74,5 +74,11 @@ jobs:
       - name: TypeScript type check
         run: npm run typecheck
 
+      # tsconfig.json excludes tests/ so the build emits only src/. Without this
+      # step the suite is transpiled but never typechecked, and a test calling a
+      # renamed option runs green while asserting nothing.
+      - name: TypeScript type check (tests)
+        run: npm run typecheck:tests
+
       - name: Build
         run: npm run build

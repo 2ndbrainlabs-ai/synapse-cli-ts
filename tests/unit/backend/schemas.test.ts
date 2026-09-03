@@ -120,9 +120,9 @@ describe("PatchedFileSchema", () => {
   });
 });
 
-describe("Anthropic tool defs match schemas", () => {
+describe("provider-neutral tool defs match schemas", () => {
   it("emit_tool_plan required fields align with Pydantic contract", () => {
-    expect(EMIT_TOOL_PLAN_TOOL.input_schema.required).toEqual([
+    expect(EMIT_TOOL_PLAN_TOOL.parameters.required).toEqual([
       "tool_name",
       "description",
       "param_names",
@@ -132,7 +132,7 @@ describe("Anthropic tool defs match schemas", () => {
   });
 
   it("emit_shard_verdicts nested band enum is exhaustive", () => {
-    const verdicts = EMIT_SHARD_VERDICTS_TOOL.input_schema.properties.verdicts;
+    const verdicts = (EMIT_SHARD_VERDICTS_TOOL.parameters.properties as Record<string, unknown>).verdicts;
     // Force TS to see it as an unknown shape then narrow inline.
     const items = (verdicts as { items: { properties: { band: { enum: string[] } } } }).items;
     expect(items.properties.band.enum).toEqual(["HIGH", "MEDIUM", "LOW", "SKIP"]);

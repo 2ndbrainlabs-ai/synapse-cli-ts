@@ -6,8 +6,8 @@
 // No Firestore cache (Python has one; local runs are infrequent enough
 // that a cache costs more than it saves).
 
-import Anthropic from "@anthropic-ai/sdk";
-import { call, extractToolUse } from "./anthropic-call.js";
+import { callTool } from "./llm-call.js";
+import type { LlmProvider } from "../providers/types.js";
 import { CANDIDATE_CLASSIFIER_SYSTEM_PROMPT } from "./prompts.js";
 import {
   EMIT_SHARD_VERDICTS_TOOL,
@@ -27,7 +27,7 @@ export interface ClassifyResult {
 }
 
 export interface ClassifyOptions {
-  client: Anthropic;
+  provider: LlmProvider;
   manifest: SurfaceManifest;
   sessionId: string;
   shardSize?: number;
@@ -61,7 +61,7 @@ function lowDefault(fns: SurfaceFunction[]): FunctionVerdict[] {
 }
 
 async function runShard(
-  client: Anthropic,
+  provider: LlmProvider,
   shardId: number,
   functions: SurfaceFunction[],
   sessionId: string,
@@ -77,24 +77,19 @@ async function runShard(
     "\n```";
 
   const system = [
-    {
-      type: "text" as const,
-      text: CANDIDATE_CLASSIFIER_SYSTEM_PROMPT,
-      cache_control: { type: "ephemeral" as const },
-    },
+    { text: CANDIDATE_CLASSIFIER_SYSTEM_PROMPT, cache: true },
   ];
 
-  let msg;
+  let input: Record<string, unknown> | null;
   try {
-    msg = await Promise.race([
-      call({
-        client,
+    input = await Promise.race([
+      callTool({
+        provider,
         task: "triage",
         sessionId,
         system,
         messages: [{ role: "user", content: userContent }],
-        tools: [EMIT_SHARD_VERDICTS_TOOL],
-        toolChoice: { type: "tool", name: EMIT_SHARD_VERDICTS_TOOL.name },
+        tool: EMIT_SHARD_VERDICTS_TOOL,
         cliVersion,
         installationId,
       }),
@@ -108,7 +103,6 @@ async function runShard(
     return lowDefault(functions);
   }
 
-  const input = extractToolUse(msg, EMIT_SHARD_VERDICTS_TOOL.name);
   if (!input) return lowDefault(functions);
 
   const parsed: FunctionVerdict[] = [];
@@ -171,7 +165,7 @@ export async function classifyCandidates(
   const shardResults = await Promise.all(
     shards.map((batch, i) =>
       runShard(
-        opts.client,
+        opts.provider,
         i,
         batch,
         opts.sessionId,

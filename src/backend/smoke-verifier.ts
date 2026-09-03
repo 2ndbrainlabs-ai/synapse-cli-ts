@@ -9,10 +9,10 @@
 //
 // One repair pass on failure via Haiku (fallback_generate task).
 
-import Anthropic from "@anthropic-ai/sdk";
+import type { LlmProvider } from "../providers/types.js";
 import { createRequire } from "node:module";
 import type TreeSitter from "tree-sitter";
-import { call, extractToolUse } from "./anthropic-call.js";
+import { callTool } from "./llm-call.js";
 import { REPAIR_SYSTEM_PROMPT } from "./prompts.js";
 import { PATCHED_FILE_TOOL, PatchedFileSchema } from "./schemas.js";
 import type { SurfaceManifest } from "../extractors/core/surface-manifest.js";
@@ -121,15 +121,15 @@ function runImportAudit(source: string, manifest: SurfaceManifest): string | nul
 // -----------------------------------------------------------------------------
 
 async function repairOnce(
-  client: Anthropic,
+  provider: LlmProvider,
   source: string,
   errorText: string,
   sessionId: string,
   cliVersion?: string,
   installationId?: string,
 ): Promise<string | null> {
-  const msg = await call({
-    client,
+  const input = await callTool({
+    provider,
     task: "fallback_generate",
     sessionId,
     system: REPAIR_SYSTEM_PROMPT,
@@ -142,13 +142,11 @@ async function repairOnce(
           "Emit the corrected file via `patched_file`.",
       },
     ],
-    tools: [PATCHED_FILE_TOOL],
-    toolChoice: { type: "tool", name: PATCHED_FILE_TOOL.name },
+    tool: PATCHED_FILE_TOOL,
     cliVersion,
     installationId,
   });
 
-  const input = extractToolUse(msg, PATCHED_FILE_TOOL.name);
   if (!input) return null;
   const parsed = PatchedFileSchema.safeParse(input);
   return parsed.success ? parsed.data.source : null;
@@ -159,7 +157,7 @@ async function repairOnce(
 // -----------------------------------------------------------------------------
 
 export interface VerifyAndRepairOptions {
-  client: Anthropic;
+  provider: LlmProvider;
   source: string;
   manifest: SurfaceManifest;
   sessionId: string;
@@ -193,7 +191,7 @@ export async function verifyAndRepair(
     let patched: string | null = null;
     try {
       patched = await repairOnce(
-        opts.client,
+        opts.provider,
         source,
         err,
         opts.sessionId,

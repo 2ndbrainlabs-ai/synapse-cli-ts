@@ -14,10 +14,10 @@
 
 import {
   isInitialized,
-  resolveAnthropicKey,
   resolveApiKey,
   resolveEffectiveMode,
 } from "../../config/manager.js";
+import { resolveLlm, type ResolvedLlm } from "../../config/llm-config.js";
 import { extractSurfaceStreamed } from "../../extractors/core/extractor.js";
 import { pickBuildMode, type BuildMode } from "./mode-picker.js";
 import { runAutoFlow } from "./auto-flow.js";
@@ -51,7 +51,15 @@ export interface BuildV2Options {
   deep?: boolean;
   /** One-shot local-mode override for this invocation. */
   local?: boolean;
-  /** Anthropic API key for --local; falls back to ANTHROPIC_API_KEY env. */
+  /** One-shot provider override for --local (see `synapse model`). */
+  provider?: string | null;
+  /** One-shot model override for --local — pins every pipeline stage. */
+  model?: string | null;
+  /** One-shot endpoint override for --local (self-hosted / gateway). */
+  llmBaseUrl?: string | null;
+  /** One-shot inference key for --local, any provider. */
+  llmApiKey?: string | null;
+  /** Back-compat alias for --api-key when the provider is Anthropic. */
   anthropicKey?: string | null;
 }
 
@@ -83,29 +91,39 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
     roundedBox("Not Initialized", "✖", t.err, [
       "Synapse is not initialized in this directory.",
       "",
-      `Run ${t.cmd("synapse init")} first, or pass ${t.cmd("--local")} to build with your Anthropic key.`,
+      `Run ${t.cmd("synapse init")} first, or pass ${t.cmd("--local")} to build with your own model.`,
     ]);
     return;
   }
 
-  // Resolve the key we'll actually use downstream.
+  // Resolve the credentials we'll actually use downstream.
   let apiKey = "";
-  let anthropicKey: string | null = null;
+  let llm: ResolvedLlm | null = null;
 
   if (effectiveMode === "local") {
-    anthropicKey = resolveAnthropicKey(opts.anthropicKey ?? null);
-    if (!anthropicKey) {
-      roundedBox("Anthropic API key required", "✖", t.err, [
-        "Local mode uses your Anthropic key for codegen.",
+    llm = resolveLlm(workingDir, {
+      provider: opts.provider,
+      model: opts.model,
+      baseUrl: opts.llmBaseUrl,
+      apiKey: opts.llmApiKey,
+      anthropicKey: opts.anthropicKey,
+    });
+
+    for (const warning of llm.warnings) stepWarn(warning);
+
+    if (llm.problems.length > 0) {
+      roundedBox(`${llm.label} not ready`, "✖", t.err, [
+        ...llm.problems,
         "",
-        "Set it in your shell:",
-        `  ${t.cmd("export ANTHROPIC_API_KEY=sk-ant-…")}`,
-        "",
-        "Or pass it inline:",
-        `  ${t.cmd("synapse build --local --anthropic-key sk-ant-…")}`,
+        `Inspect or change it with ${t.cmd("synapse model")}.`,
       ]);
       return;
     }
+
+    stepInfo(
+      `Local codegen on ${llm.label} — ` +
+        `${llm.models.generate} (generate), ${llm.models.triage} (triage)`,
+    );
   } else {
     const resolved = resolveApiKey(workingDir);
     if (!resolved) {
@@ -254,7 +272,7 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
         serverName: opts.serverName,
         baseUrl: opts.baseUrl,
         sessionId,
-        anthropicKey,
+        llm,
         smartNames: opts.smartNames,
       });
     } else if (mode === "auto") {
@@ -276,7 +294,7 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
         deep: opts.deep,
         session,
         effectiveMode,
-        anthropicKey,
+        llm,
       });
     }
   } finally {

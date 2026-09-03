@@ -103,6 +103,10 @@ program
     await runAnalyze(opts.output, opts.verbose ?? false);
   });
 
+function collectHeader(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
 program
   .command("build")
   .description("Build MCP server based on requirements")
@@ -120,18 +124,29 @@ program
   .option(
     "--smart-names",
     "v2 auto: read handler source (+ README/docs) to name/describe tools from real " +
-      "behavior instead of route + docstring alone. Local runs it via your Anthropic " +
-      "key; hosted runs it server-side.",
+      "behavior instead of route + docstring alone. Local runs it on your configured " +
+      "provider; hosted runs it server-side.",
   )
   .option("--resume", "v2: resume the most recent unfinished discover session for this repo")
   .option("--max-time <minutes>", "v2: soft wall-clock cap in minutes (default 15)")
   .option("--deep", "v2 custom: raise candidate cap from 200 to 500 during classification")
   .option(
     "--local",
-    "One-shot override: run this build locally with your Anthropic key. " +
-      "Uses ANTHROPIC_API_KEY env or --anthropic-key. Doesn't change the project's stored mode.",
+    "One-shot override: run this build locally on your own model. " +
+      "Uses the provider from `synapse model`. Doesn't change the project's stored mode.",
   )
-  .option("--anthropic-key <key>", "Anthropic API key for --local mode.")
+  // One-shot provider overrides for --local. Persist them with `synapse model set`.
+  .option(
+    "--provider <name>",
+    "--local: provider for this build — anthropic | openai | groq | grok | openrouter | ollama | custom",
+  )
+  .option("--model <id>", "--local: model id for this build (pins every stage)")
+  .option("--llm-base-url <url>", "--local: OpenAI-compatible endpoint for this build")
+  .option("--llm-api-key <key>", "--local: inference API key for this build")
+  .option(
+    "--anthropic-key <key>",
+    "Deprecated alias for --llm-api-key; implies --provider anthropic.",
+  )
   .action(async (opts) => {
     if (opts.engine === "v2") {
       const { runBuildV2 } = await import("./commands/v2/build-v2.js");
@@ -147,6 +162,10 @@ program
         maxTimeMinutes: Number.isFinite(maxTimeMinutes) ? (maxTimeMinutes as number) : undefined,
         deep: opts.deep ?? false,
         local: opts.local ?? false,
+        provider: opts.provider,
+        model: opts.model,
+        llmBaseUrl: opts.llmBaseUrl,
+        llmApiKey: opts.llmApiKey,
         anthropicKey: opts.anthropicKey,
       });
       return;
@@ -161,6 +180,75 @@ program
       local: opts.local ?? false,
       anthropicKey: opts.anthropicKey,
     });
+  });
+
+// `synapse model` — provider selection for local builds. Bare invocation shows
+// the resolved config; subcommands list, switch and clear it.
+const modelCmd = program
+  .command("model")
+  .description(
+    "Show or switch the inference provider used by local builds (`synapse build --local`)",
+  )
+  .action(async () => {
+    const { runModelShow } = await import("./commands/model.js");
+    runModelShow();
+  });
+
+modelCmd
+  .command("list")
+  .description("List supported inference providers and their default models")
+  .action(async () => {
+    const { runModelList } = await import("./commands/model.js");
+    runModelList();
+  });
+
+modelCmd
+  .command("set <provider>")
+  .description(
+    "Switch provider: anthropic | openai | groq | grok | openrouter | ollama | custom",
+  )
+  .option("--model <id>", "Model id for every pipeline stage")
+  .option("--triage <id>", "Model for candidate classification (cheap, high volume)")
+  .option("--generate <id>", "Model for code generation")
+  .option("--verify <id>", "Model for verification and repair")
+  .option("--fallback <id>", "Model used when the primary is overloaded")
+  .option("--base-url <url>", "OpenAI-compatible endpoint (required for `custom`)")
+  .option(
+    "--save-key <key>",
+    "Persist the API key, encrypted and bound to this machine. " +
+      "Off by default — keys are normally read from the environment each run.",
+  )
+  .option("--header <name:value>", "Extra request header (repeatable)", collectHeader, [])
+  .option("--no-tool-choice", "Endpoint ignores tool_choice — coerce JSON output instead")
+  .option("--max-completion-tokens", "Endpoint expects max_completion_tokens, not max_tokens")
+  .option("--no-temperature", "Endpoint rejects the temperature parameter")
+  .option("--global", "Save to ~/.synapse instead of this project")
+  .action(async (provider: string, opts) => {
+    const { runModelSet } = await import("./commands/model.js");
+    runModelSet(provider, {
+      model: opts.model,
+      triage: opts.triage,
+      generate: opts.generate,
+      verify: opts.verify,
+      fallback: opts.fallback,
+      baseUrl: opts.baseUrl,
+      saveKey: opts.saveKey,
+      header: opts.header,
+      // commander maps --no-x to x:false, so invert back to our opt-in flags.
+      noToolChoice: opts.toolChoice === false,
+      maxCompletionTokens: opts.maxCompletionTokens ?? false,
+      noTemperature: opts.temperature === false,
+      globalScope: opts.global ?? false,
+    });
+  });
+
+modelCmd
+  .command("reset")
+  .description("Remove the saved inference config (local builds return to Anthropic)")
+  .option("--global", "Clear ~/.synapse instead of this project")
+  .action(async (opts) => {
+    const { runModelReset } = await import("./commands/model.js");
+    runModelReset({ globalScope: opts.global ?? false });
   });
 
 program

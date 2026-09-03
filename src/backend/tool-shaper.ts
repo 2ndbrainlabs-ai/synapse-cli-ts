@@ -7,11 +7,10 @@
 // rejected output + a user turn instructing the model to emit a corrected
 // version. Up to 3 total attempts before giving up.
 
-import Anthropic from "@anthropic-ai/sdk";
-import type { MessageParam } from "@anthropic-ai/sdk/resources/messages.mjs";
+import type { LlmProvider, LlmMessage } from "../providers/types.js";
 import { createRequire } from "node:module";
 import type TreeSitter from "tree-sitter";
-import { call, extractToolUse } from "./anthropic-call.js";
+import { callTool } from "./llm-call.js";
 import { TOOL_SHAPER_SYSTEM_PROMPT } from "./prompts.js";
 import {
   EMIT_TOOL_PLAN_TOOL,
@@ -122,7 +121,7 @@ function auditBody(bodySource: string, manifest: SurfaceManifest): AuditIssue[] 
 // -----------------------------------------------------------------------------
 
 export interface ShapeToolOptions {
-  client: Anthropic;
+  provider: LlmProvider;
   manifest: SurfaceManifest;
   intent: string;
   selectedQualnames: string[];
@@ -191,7 +190,7 @@ export async function shapeTool(opts: ShapeToolOptions): Promise<ToolPlan> {
     "```json\n" + JSON.stringify(manifestView, null, 2) + "\n```\n\n" +
     "Emit ONE MCP tool via `emit_tool_plan` that fulfils the intent using ONLY the listed functions.";
 
-  let messages: MessageParam[] = [{ role: "user", content: userContent }];
+  let messages: LlmMessage[] = [{ role: "user", content: userContent }];
   let lastError = "";
 
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -203,21 +202,20 @@ export async function shapeTool(opts: ShapeToolOptions): Promise<ToolPlan> {
       );
     }
 
-    const msg = await call({
-      client: opts.client,
+    const toolInput = await callTool({
+      provider: opts.provider,
       task: "generate",
       sessionId: opts.sessionId,
       system: TOOL_SHAPER_SYSTEM_PROMPT,
       messages,
-      tools: [EMIT_TOOL_PLAN_TOOL],
-      toolChoice: { type: "tool", name: EMIT_TOOL_PLAN_TOOL.name },
+      tool: EMIT_TOOL_PLAN_TOOL,
       cliVersion: opts.cliVersion,
       installationId: opts.installationId,
     });
 
-    const toolInput = extractToolUse(msg, EMIT_TOOL_PLAN_TOOL.name);
     if (toolInput === null) {
-      lastError = "Model did not emit an emit_tool_plan tool_use block.";
+      lastError =
+        "Model returned no emit_tool_plan call and no JSON matching its schema.";
     } else {
       const parsed = ToolPlanSchema.safeParse(toolInput);
       if (!parsed.success) {
@@ -239,15 +237,10 @@ export async function shapeTool(opts: ShapeToolOptions): Promise<ToolPlan> {
       { role: "user", content: userContent },
       {
         role: "assistant",
-        content: [
-          {
-            type: "text",
-            text:
-              toolInput === null
-                ? "(no tool_use emitted)"
-                : JSON.stringify(toolInput, null, 2),
-          },
-        ],
+        content:
+          toolInput === null
+            ? "(no tool call emitted)"
+            : JSON.stringify(toolInput, null, 2),
       },
       {
         role: "user",
@@ -259,5 +252,11 @@ export async function shapeTool(opts: ShapeToolOptions): Promise<ToolPlan> {
     ];
   }
 
-  throw new Error(`ToolShaper failed after 3 attempts. Last error:\n${lastError}`);
+  throw new Error(
+    `ToolShaper failed after 3 attempts on ${opts.provider.label}. ` +
+      `Last error:\n${lastError}\n\n` +
+      "If the model kept returning nothing schema-shaped, it is likely too " +
+      "small for structured codegen — switch to a stronger one with " +
+      "`synapse model set <provider> --model <id>`.",
+  );
 }
