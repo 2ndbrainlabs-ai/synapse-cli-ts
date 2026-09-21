@@ -19,6 +19,7 @@ import {
 } from "../../config/manager.js";
 import { resolveLlm, type ResolvedLlm } from "../../config/llm-config.js";
 import { extractSurfaceStreamed } from "../../extractors/core/extractor.js";
+import type { SurfaceManifest } from "../../extractors/core/surface-manifest.js";
 import { pickBuildMode, type BuildMode } from "./mode-picker.js";
 import { runAutoFlow } from "./auto-flow.js";
 import { runLocalAutoFlow } from "./local-auto-flow.js";
@@ -33,6 +34,13 @@ import {
   readLedger,
 } from "../../session/ledger.js";
 import { computeRepoHash, newSessionId } from "../../session/session-id.js";
+import {
+  buildSurfaceCache,
+  cacheToManifest,
+  cacheToResumeScanned,
+  readSurfaceCache,
+  writeSurfaceCache,
+} from "../../session/surface-cache.js";
 
 export interface BuildV2Options {
   auto?: boolean;
@@ -61,6 +69,8 @@ export interface BuildV2Options {
   llmApiKey?: string | null;
   /** Back-compat alias for --api-key when the provider is Anthropic. */
   anthropicKey?: string | null;
+  /** Re-scan for new/changed files instead of reusing the last discovery result. */
+  discover?: boolean;
 }
 
 function parseMaxTimeMs(opts: BuildV2Options): number {
@@ -143,6 +153,7 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
 
   const repoHash = computeRepoHash(workingDir);
   const maxTimeMs = parseMaxTimeMs(opts);
+  const surfaceCache = readSurfaceCache(workingDir, repoHash);
 
   // ---------------------------------------------------------------------------
   // Resume attempt — pick the most recent unfinished session for this repo.
@@ -207,59 +218,110 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
     resumeFrom: resumeState,
   });
 
-  const spinner = new Spinner("orbital");
-  spinner.start("Scanning codebase");
-  session.onProgress((p) => {
-    spinner.updateMeta({
-      extra: `${p.filesSeen} scanned · ${p.filesMatched} matched · ${p.endpointsFound} ep · ${p.functionsFound} fn`,
-    });
-  });
+  const captureFunctions = mode === "custom";
+  const cacheCompatible = !!surfaceCache && (!captureFunctions || surfaceCache.captured_functions);
+  const skipDiscovery = !opts.resume && cacheCompatible && !opts.discover;
 
-  let manifest: Awaited<ReturnType<typeof extractSurfaceStreamed>>;
-  try {
-    manifest = await extractSurfaceStreamed({
-      workingDir,
-      session,
-      captureFunctions: mode === "custom",
+  let manifest: SurfaceManifest;
+
+  if (skipDiscovery) {
+    // Fast path: reuse the last completed discovery result untouched — no
+    // prefilter scan, no parsing. Pass --discover to force a re-scan.
+    manifest = cacheToManifest(surfaceCache!);
+    stepOk("Session", sessionId);
+    stepInfo(
+      "Discover",
+      `Reusing cached discovery — ${manifest.endpoints.length} endpoint(s), ` +
+        `${manifest.functions.length} function(s). Pass ${t.cmd("--discover")} to re-scan for changes.`,
+    );
+    stepInfo(
+      "Language",
+      `${manifest.language}${manifest.framework ? ` / ${manifest.framework}` : ""}`,
+    );
+  } else {
+    if (!opts.resume && surfaceCache) {
+      if (cacheCompatible) {
+        // Seed the same SHA-based skip/merge cache the streamed extractors
+        // already consult for `--resume` — files whose bytes are unchanged
+        // are replayed from the cache instead of re-parsed.
+        for (const [relPath, record] of cacheToResumeScanned(surfaceCache)) {
+          session.resume.scanned.set(relPath, record);
+        }
+      } else {
+        stepInfo(
+          "Discover",
+          "Cached discovery doesn't include function data needed for Custom mode — running a full scan.",
+        );
+      }
+    }
+
+    const spinner = new Spinner("orbital");
+    spinner.start("Scanning codebase");
+    session.onProgress((p) => {
+      spinner.updateMeta({
+        extra: `${p.filesSeen} scanned · ${p.filesMatched} matched · ${p.endpointsFound} ep · ${p.functionsFound} fn`,
+      });
     });
-  } catch (e) {
-    spinner.fail("Extraction failed", String(e));
-    session.recordError({
-      code: "EXTRACTOR_FAILED",
-      stage: "extract",
-      message: "Couldn't extract the codebase surface.",
-      technical: String(e),
-      hint: "Check that the repo has valid Python source. If this repeats, share the ledger via `synapse logs`.",
+
+    let extracted: Awaited<ReturnType<typeof extractSurfaceStreamed>>;
+    try {
+      extracted = await extractSurfaceStreamed({
+        workingDir,
+        session,
+        captureFunctions,
+      });
+    } catch (e) {
+      spinner.fail("Extraction failed", String(e));
+      session.recordError({
+        code: "EXTRACTOR_FAILED",
+        stage: "extract",
+        message: "Couldn't extract the codebase surface.",
+        technical: String(e),
+        hint: "Check that the repo has valid Python source. If this repeats, share the ledger via `synapse logs`.",
+      });
+      session.dispose();
+      return;
+    }
+
+    if (session.aborted) {
+      // Session was paused (sigint or time_cap). Report gracefully.
+      spinner.complete("Scan paused — partial results captured");
+      const stats = (extracted as any).stats ?? {};
+      const filesParsed = stats.filesParsed ?? 0;
+      const filesSeen = stats.filesSeen ?? 0;
+      roundedBox("Session Paused", "⚠", t.warn, [
+        `Scanned ${filesParsed} / ${filesSeen} matched files before pause.`,
+        `${extracted.endpoints.length} endpoint(s) and ${extracted.functions.length} function(s) captured.`,
+        "",
+        `Resume with: ${t.cmd("synapse build --resume")}`,
+      ]);
+      session.dispose();
+      return;
+    }
+
+    manifest = extracted;
+
+    spinner.complete(
+      `Extracted ${manifest.endpoints.length} endpoint(s) and ${manifest.functions.length} function(s)`,
+    );
+    stepOk("Session", sessionId);
+
+    stepInfo(
+      "Language",
+      `${manifest.language}${manifest.framework ? ` / ${manifest.framework}` : ""}`,
+    );
+
+    // Persist the discovery result so future `synapse build` runs can skip
+    // this step entirely until `--discover` is passed again.
+    const nextCache = buildSurfaceCache({
+      repoHash,
+      manifest,
+      ledgerRecords: readLedger(workingDir, sessionId),
+      previous: surfaceCache,
+      captureFunctions,
     });
-    session.dispose();
-    return;
+    writeSurfaceCache(workingDir, nextCache);
   }
-
-  if (session.aborted) {
-    // Session was paused (sigint or time_cap). Report gracefully.
-    spinner.complete("Scan paused — partial results captured");
-    const stats = (manifest as any).stats ?? {};
-    const filesParsed = stats.filesParsed ?? 0;
-    const filesSeen = stats.filesSeen ?? 0;
-    roundedBox("Session Paused", "⚠", t.warn, [
-      `Scanned ${filesParsed} / ${filesSeen} matched files before pause.`,
-      `${manifest.endpoints.length} endpoint(s) and ${manifest.functions.length} function(s) captured.`,
-      "",
-      `Resume with: ${t.cmd("synapse build --resume")}`,
-    ]);
-    session.dispose();
-    return;
-  }
-
-  spinner.complete(
-    `Extracted ${manifest.endpoints.length} endpoint(s) and ${manifest.functions.length} function(s)`,
-  );
-  stepOk("Session", sessionId);
-
-  stepInfo(
-    "Language",
-    `${manifest.language}${manifest.framework ? ` / ${manifest.framework}` : ""}`,
-  );
 
   // ---------------------------------------------------------------------------
   // Dispatch — Auto or Custom.
