@@ -145,6 +145,7 @@ program
       "provider; hosted runs it server-side.",
   )
   .option("--resume", "v2: resume the most recent unfinished discover session for this repo")
+  .option("--discover", "v2: re-scan the codebase for new/changed files instead of reusing the last discovery result")
   .option("--max-time <minutes>", "v2: soft wall-clock cap in minutes (default 15)")
   .option("--deep", "v2 custom: raise candidate cap from 200 to 500 during classification")
   .option(
@@ -181,6 +182,7 @@ program
         endpoints: opts.endpoints,
         smartNames: opts.smartNames ?? false,
         resume: opts.resume ?? false,
+        discover: opts.discover ?? false,
         maxTimeMinutes: Number.isFinite(maxTimeMinutes) ? (maxTimeMinutes as number) : undefined,
         deep: opts.deep ?? false,
         local: opts.local ?? false,
