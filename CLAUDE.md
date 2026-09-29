@@ -69,3 +69,17 @@ Both clients must keep matching public method shapes. `--local` applies to **one
 - Don't add runtime dependencies without discussion; install size matters.
 - Every bug fix comes with a test that fails without the fix. Branch from `main`.
 - `test-apis.ts` at the repo root is an ad-hoc script that reads `/tmp` fixtures. It is not part of the test suite; the real fixtures are in `tests/fixtures/multi-lang-apis/`.
+
+## Agent skills
+
+### Issue tracker
+
+Work items live in Jira (project `SYN` on 2ndbrainlabs.atlassian.net) and are accessed with `acli`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The default five roles (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`), applied as Jira labels. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one `CONTEXT.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
