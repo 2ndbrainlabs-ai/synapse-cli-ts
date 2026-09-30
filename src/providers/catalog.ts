@@ -158,7 +158,7 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     },
     caps: OPENAI_COMPAT_CAPS,
     headers: {
-      "HTTP-Referer": "https://synaps3.ai",
+      "HTTP-Referer": "https://synapse.2ndbrainlabs.ai",
       "X-Title": "Synapse CLI",
     },
   },

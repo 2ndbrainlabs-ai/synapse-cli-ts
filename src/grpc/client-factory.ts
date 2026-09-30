@@ -1,7 +1,7 @@
 // src/grpc/client-factory.ts
 //
 // Factory returning the right ISynapseClient impl based on effective mode.
-// - "hosted"  → SynapseClient (this file's neighbor, talks gRPC to grpc.synaps3.ai)
+// - "hosted"  → SynapseClient (this file's neighbor, talks gRPC to grpc.synapse.2ndbrainlabs.ai)
 // - "local"   → LocalSynapseClient (src/backend/index.ts, in-process TS pipeline)
 
 import { SynapseClient } from "./client.js";

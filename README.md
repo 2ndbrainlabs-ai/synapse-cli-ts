@@ -8,7 +8,7 @@
 
 Turn any codebase into a production-ready [Model Context Protocol](https://modelcontextprotocol.io) server — from your terminal, in seconds.
 
-[Homepage](https://synaps3.ai) · [Docs](https://synaps3.ai/docs) · [Report an issue](https://github.com/2ndbrainlabs-ai/synapse-cli/issues) · [Discussions](https://github.com/2ndbrainlabs-ai/synapse-cli/discussions)
+[Homepage](https://synapse.2ndbrainlabs.ai) · [Docs](https://synapse.2ndbrainlabs.ai/docs) · [Report an issue](https://github.com/2ndbrainlabs-ai/synapse-cli/issues) · [Discussions](https://github.com/2ndbrainlabs-ai/synapse-cli/discussions)
 
 [![npm version](https://img.shields.io/npm/v/@2ndbrainlabs-ai/synapse-cli.svg?logo=npm&color=D97757)](https://www.npmjs.com/package/@2ndbrainlabs-ai/synapse-cli)
 [![node](https://img.shields.io/node/v/@2ndbrainlabs-ai/synapse-cli.svg?logo=node.js)](https://nodejs.org)
@@ -65,7 +65,7 @@ synapse build --local           # generates locally on your own key
 
 `--local` is a **per-invocation** flag — no project config pins a repo to local mode, so switching back is just dropping the flag. `synapse init` is not required for a local build.
 
-Locally-generated servers don't count against any quota; analyze runs are unbounded. Anonymous usage telemetry (no code, no prompts — just event names + counts) still flows to `api.synaps3.ai`; opt out with `SYNAPSE_TELEMETRY=0`.
+Locally-generated servers don't count against any quota; analyze runs are unbounded. Anonymous usage telemetry (no code, no prompts — just event names + counts) still flows to `api.synapse.2ndbrainlabs.ai`; opt out with `SYNAPSE_TELEMETRY=0`.
 
 **Local-mode limits:**
 - Python target only (TypeScript target follows).
@@ -371,8 +371,8 @@ Every tool call is scoped to `process.cwd()`. Only the specific bytes the agent 
 
 ## Documentation
 
-- **Getting started** — [synaps3.ai/docs](https://synaps3.ai/docs)
-- **API reference** — [synaps3.ai/docs/api](https://synaps3.ai/docs/api)
+- **Getting started** — [synapse.2ndbrainlabs.ai/docs](https://synapse.2ndbrainlabs.ai/docs)
+- **API reference** — [synapse.2ndbrainlabs.ai/docs/api](https://synapse.2ndbrainlabs.ai/docs/api)
 - **Examples** — [github.com/2ndbrainlabs-ai/synapse-examples](https://github.com/2ndbrainlabs-ai/synapse-examples)
 
 ## Development
