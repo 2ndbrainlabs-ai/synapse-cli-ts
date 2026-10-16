@@ -59,6 +59,8 @@ export interface BuildV2Options {
   llmBaseUrl?: string | null;
   /** One-shot inference key for --local, any provider. */
   llmApiKey?: string | null;
+  llmRegion?: string | null;
+  llmProject?: string | null;
   /** Back-compat alias for --api-key when the provider is Anthropic. */
   anthropicKey?: string | null;
 }
@@ -106,6 +108,8 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
       model: opts.model,
       baseUrl: opts.llmBaseUrl,
       apiKey: opts.llmApiKey,
+      region: opts.llmRegion,
+      project: opts.llmProject,
       anthropicKey: opts.anthropicKey,
     });
 

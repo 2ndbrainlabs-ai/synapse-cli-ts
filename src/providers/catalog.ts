@@ -35,10 +35,30 @@ export interface ProviderCaps {
   promptCache: boolean;
 }
 
+export type ProviderKind = "anthropic" | "openai-compat" | "bedrock" | "vertex";
+
+/**
+ * Cloud providers authenticate with their platform's own credential chain
+ * (AWS / Google ADC), never a Synapse-stored key, and need a region — plus a
+ * project for Vertex — instead of a base URL.
+ */
+export interface CloudSpec {
+  /** Env vars checked in order for the region. */
+  regionEnv: string[];
+  /** Used when no region is configured anywhere. */
+  defaultRegion: string;
+  /** Env vars checked in order for the GCP project (Vertex only). */
+  projectEnv?: string[];
+  /** How credentials are found, for `synapse model` display. */
+  credentials: string;
+}
+
 export interface ProviderSpec {
   id: ProviderId;
   label: string;
-  kind: "anthropic" | "openai-compat";
+  kind: ProviderKind;
+  /** Present for bedrock / vertex. */
+  cloud?: CloudSpec;
   /** Default endpoint root. `null` means the user must supply one. */
   baseUrl: string | null;
   /** Env vars checked in order for the key. */
@@ -191,6 +211,63 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
       "`ollama pull qwen3-coder:30b`). Small models often fail the strict schema.",
   },
 
+  bedrock: {
+    id: "bedrock",
+    label: "Amazon Bedrock",
+    kind: "bedrock",
+    baseUrl: null,
+    apiKeyEnv: [],
+    keyRequired: false,
+    docsUrl: "https://docs.aws.amazon.com/bedrock/latest/userguide/models-supported.html",
+    // "{geo}" becomes us / eu / apac from the configured region, giving the
+    // cross-region inference profile Claude 4.x requires on Bedrock.
+    defaults: {
+      triage: "{geo}.anthropic.claude-haiku-4-5-20251001-v1:0",
+      generate: "{geo}.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      verify: "{geo}.anthropic.claude-sonnet-4-5-20250929-v1:0",
+      fallback_generate: "{geo}.anthropic.claude-haiku-4-5-20251001-v1:0",
+    },
+    caps: { toolChoice: true, maxTokensField: "max_tokens", temperature: true, promptCache: true },
+    cloud: {
+      regionEnv: ["AWS_REGION", "AWS_DEFAULT_REGION"],
+      defaultRegion: "us-east-1",
+      credentials: "AWS credential chain (env, profile, SSO, AWS_BEARER_TOKEN_BEDROCK)",
+    },
+    note:
+      "Uses your AWS credentials — `aws configure`, `aws sso login`, AWS_PROFILE, or a " +
+      "Bedrock API key in AWS_BEARER_TOKEN_BEDROCK. Enable model access for the models " +
+      "in the Bedrock console for this region first. Requires Node 20+.",
+  },
+
+  vertex: {
+    id: "vertex",
+    label: "Google Vertex AI",
+    kind: "vertex",
+    baseUrl: null,
+    apiKeyEnv: [],
+    keyRequired: false,
+    docsUrl: "https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude",
+    // claude-* ids go to Vertex's Anthropic API; anything else (gemini-2.5-pro,
+    // gemini-2.5-flash, …) goes to Vertex's OpenAI-compatible endpoint.
+    defaults: {
+      triage: "claude-haiku-4-5@20251001",
+      generate: "claude-sonnet-4-5@20250929",
+      verify: "claude-sonnet-4-5@20250929",
+      fallback_generate: "claude-haiku-4-5@20251001",
+    },
+    caps: { toolChoice: true, maxTokensField: "max_tokens", temperature: true, promptCache: true },
+    cloud: {
+      regionEnv: ["GOOGLE_CLOUD_LOCATION", "CLOUD_ML_REGION", "VERTEX_LOCATION"],
+      defaultRegion: "global",
+      projectEnv: ["GOOGLE_CLOUD_PROJECT", "ANTHROPIC_VERTEX_PROJECT_ID", "GCLOUD_PROJECT", "CLOUDSDK_CORE_PROJECT"],
+      credentials: "Google Application Default Credentials",
+    },
+    note:
+      "Uses Google Application Default Credentials — run `gcloud auth application-default " +
+      "login`, or set GOOGLE_APPLICATION_CREDENTIALS. Claude models must be enabled in " +
+      "Vertex Model Garden. For Gemini, pass e.g. --model gemini-2.5-pro.",
+  },
+
   custom: {
     id: "custom",
     label: "Custom endpoint",
@@ -221,6 +298,8 @@ export function isProviderId(v: string): v is ProviderId {
 
 /** Env var that holds a key for this provider, if any is set. */
 export function keyFromEnv(id: ProviderId): string | null {
+  // Cloud providers never take a key from Synapse; their SDKs read credentials.
+  if (PROVIDERS[id].cloud) return null;
   for (const name of PROVIDERS[id].apiKeyEnv) {
     const v = (process.env[name] ?? "").trim();
     if (v) return v;

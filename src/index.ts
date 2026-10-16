@@ -138,11 +138,13 @@ program
   // One-shot provider overrides for --local. Persist them with `synapse model set`.
   .option(
     "--provider <name>",
-    "--local: provider for this build — anthropic | openai | groq | grok | openrouter | ollama | custom",
+    "--local: provider for this build — anthropic | openai | groq | grok | openrouter | ollama | custom | bedrock | vertex",
   )
   .option("--model <id>", "--local: model id for this build (pins every stage)")
   .option("--llm-base-url <url>", "--local: OpenAI-compatible endpoint for this build")
   .option("--llm-api-key <key>", "--local: inference API key for this build")
+  .option("--llm-region <region>", "--local: AWS region (bedrock) or Vertex location for this build")
+  .option("--llm-project <id>", "--local: GCP project for vertex for this build")
   .option(
     "--anthropic-key <key>",
     "Deprecated alias for --llm-api-key; implies --provider anthropic.",
@@ -166,6 +168,8 @@ program
         model: opts.model,
         llmBaseUrl: opts.llmBaseUrl,
         llmApiKey: opts.llmApiKey,
+        llmRegion: opts.llmRegion,
+        llmProject: opts.llmProject,
         anthropicKey: opts.anthropicKey,
       });
       return;
@@ -205,7 +209,7 @@ modelCmd
 modelCmd
   .command("set <provider>")
   .description(
-    "Switch provider: anthropic | openai | groq | grok | openrouter | ollama | custom",
+    "Switch provider: anthropic | openai | groq | grok | openrouter | ollama | custom | bedrock | vertex",
   )
   .option("--model <id>", "Model id for every pipeline stage")
   .option("--triage <id>", "Model for candidate classification (cheap, high volume)")
@@ -222,6 +226,9 @@ modelCmd
   .option("--no-tool-choice", "Endpoint ignores tool_choice — coerce JSON output instead")
   .option("--max-completion-tokens", "Endpoint expects max_completion_tokens, not max_tokens")
   .option("--no-temperature", "Endpoint rejects the temperature parameter")
+  .option("--region <region>", "bedrock: AWS region · vertex: location (e.g. global, us-east5)")
+  .option("--project <id>", "vertex: GCP project id")
+  .option("--profile <name>", "bedrock: AWS profile from ~/.aws/config")
   .option("--global", "Save to ~/.synapse instead of this project")
   .action(async (provider: string, opts) => {
     const { runModelSet } = await import("./commands/model.js");
@@ -238,6 +245,9 @@ modelCmd
       noToolChoice: opts.toolChoice === false,
       maxCompletionTokens: opts.maxCompletionTokens ?? false,
       noTemperature: opts.temperature === false,
+      region: opts.region,
+      project: opts.project,
+      profile: opts.profile,
       globalScope: opts.global ?? false,
     });
   });

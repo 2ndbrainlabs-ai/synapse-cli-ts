@@ -25,7 +25,7 @@ Synapse is building the context layer enterprises need to make their internal sy
 
 Synapse is a CLI that reads your codebase and generates a runnable MCP server — the tool schemas, argument marshalling, and boilerplate are all handled for you. Point it at a project, describe what you want exposed, and drop the resulting server into Claude Desktop, Cursor, or any MCP-compatible client.
 
-The CLI does source exploration **client-side** — nothing is uploaded. Generation runs on the Synapse backend by default, so model routing, retries, and quota stay centrally managed — or entirely on your own model with `--local`, using Anthropic, OpenAI, Groq, xAI, OpenRouter, Ollama, or your own inference endpoint. See [Run locally with your own model](#run-locally-with-your-own-model).
+The CLI does source exploration **client-side** — nothing is uploaded. Generation runs on the Synapse backend by default, so model routing, retries, and quota stay centrally managed — or entirely on your own model with `--local`, using Anthropic, OpenAI, Groq, xAI, OpenRouter, Ollama, Amazon Bedrock, Google Vertex AI, or your own inference endpoint. See [Run locally with your own model](#run-locally-with-your-own-model).
 
 ## Install
 
@@ -91,6 +91,8 @@ synapse model reset             # back to Anthropic
 | xAI (Grok) | `grok` | `https://api.x.ai/v1` | chat completions |
 | OpenRouter | `openrouter` | `https://openrouter.ai/api/v1` | chat completions |
 | Ollama | `ollama` | `http://localhost:11434/v1` | chat completions |
+| Amazon Bedrock | `bedrock` | your AWS region | Converse API |
+| Google Vertex AI | `vertex` | your GCP project + location | Anthropic API (Claude), chat completions (Gemini) |
 | Your own endpoint | `custom` | you supply | chat completions |
 
 Pin models per stage — the pipeline uses a cheap model for high-volume triage and a strong one for codegen, so you can mix:
@@ -117,6 +119,8 @@ Synapse does not sniff for keys. You choose the provider; the provider's spec de
 | `openrouter` | `OPENROUTER_API_KEY` | yes |
 | `ollama` | `OLLAMA_API_KEY` | **no** |
 | `custom` | `SYNAPSE_LLM_API_KEY` | no |
+| `bedrock` | none — your AWS credentials | see [Cloud providers](#cloud-providers-amazon-bedrock-and-google-vertex-ai) |
+| `vertex` | none — Google Application Default Credentials | see [Cloud providers](#cloud-providers-amazon-bedrock-and-google-vertex-ai) |
 
 Two conveniences:
 
@@ -169,6 +173,39 @@ ollama pull qwen3-coder:30b
 synapse model set ollama
 synapse build --local
 ```
+
+### Cloud providers: Amazon Bedrock and Google Vertex AI
+
+Run local codegen on models in **your own** AWS or Google Cloud account. Synapse never sees or stores a cloud credential: it uses the same credentials your `aws` / `gcloud` CLI already uses, and `--save-key` is refused for these providers.
+
+**Amazon Bedrock** — credentials from the standard AWS chain: `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`, a profile (`AWS_PROFILE` or `--profile`), an SSO session from `aws sso login`, or a Bedrock API key in `AWS_BEARER_TOKEN_BEDROCK`. Requires Node 20+.
+
+```bash
+aws sso login --profile work
+synapse model set bedrock --region us-east-1 --profile work
+synapse build --local
+```
+
+- Defaults are Claude Sonnet 4.5 (generate) and Haiku 4.5 (triage) via **cross-region inference profiles**. The `us.` / `eu.` / `apac.` prefix is picked from your region automatically.
+- Enable access to the models in the Bedrock console (**Model access**) for that region first. Otherwise Bedrock returns an access-denied error, which Synapse explains.
+- Any Bedrock model works through the Converse API, e.g. `--model us.amazon.nova-pro-v1:0`. Claude, Nova and Mistral get a forced tool call. Other families get a JSON fallback.
+- Region comes from `--region`, then `SYNAPSE_LLM_REGION`, then the saved config, then `AWS_REGION` / `AWS_DEFAULT_REGION`, then `us-east-1`.
+
+**Google Vertex AI** — credentials from Application Default Credentials: `gcloud auth application-default login`, `GOOGLE_APPLICATION_CREDENTIALS` pointing at a service-account key, or the attached service account on GCP. The account needs `roles/aiplatform.user`.
+
+```bash
+gcloud auth application-default login
+synapse model set vertex --project my-gcp-project            # Claude, global location
+synapse model set vertex --project my-gcp-project --model gemini-2.5-pro
+synapse build --local
+```
+
+- `claude-*` model ids go to Vertex's Anthropic API, so behaviour, forced tool calls and prompt caching match the direct Anthropic path. Enable the Claude models in **Model Garden** first.
+- Any other id (`gemini-2.5-pro`, `gemini-2.5-flash`, Model Garden models) goes to Vertex's OpenAI-compatible endpoint. You can mix them per stage: `--triage gemini-2.5-flash --generate claude-sonnet-4-5@20250929`.
+- Location defaults to `global`. Use `--region us-east5` (or `GOOGLE_CLOUD_LOCATION`) to pin a region.
+- Project comes from `--project`, then `SYNAPSE_LLM_PROJECT`, then the saved config, then `GOOGLE_CLOUD_PROJECT`.
+
+For a one-off build without saving anything: `synapse build --local --provider vertex --llm-project my-proj --llm-region us-east5`.
 
 ### Checking that a key was picked up
 

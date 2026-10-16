@@ -46,6 +46,11 @@ export interface OpenAICompatOptions {
   caps: ProviderCaps;
   models: Record<Task, string>;
   headers?: Record<string, string>;
+  /**
+   * Short-lived bearer token source (Vertex AI's OAuth access token). Called per
+   * request and takes precedence over apiKey; the source handles caching/refresh.
+   */
+  bearerToken?: () => Promise<string>;
 }
 
 // -----------------------------------------------------------------------------
@@ -80,7 +85,7 @@ interface ChatResponse {
  * inside a generated Python body doesn't truncate the object — that body is
  * the single largest field the backend asks for, so naive matching corrupts it.
  */
-function extractJsonObject(text: string): Record<string, unknown> | null {
+export function extractJsonObject(text: string): Record<string, unknown> | null {
   const start = text.indexOf("{");
   if (start === -1) return null;
 
@@ -201,6 +206,7 @@ export class OpenAICompatProvider implements LlmProvider {
   private readonly caps: ProviderCaps;
   private readonly models: Record<Task, string>;
   private readonly extraHeaders: Record<string, string>;
+  private readonly bearerToken?: () => Promise<string>;
 
   constructor(opts: OpenAICompatOptions) {
     this.id = opts.id;
@@ -210,6 +216,7 @@ export class OpenAICompatProvider implements LlmProvider {
     this.caps = opts.caps;
     this.models = opts.models;
     this.extraHeaders = opts.headers ?? {};
+    this.bearerToken = opts.bearerToken;
   }
 
   modelFor(task: Task): string {
@@ -265,7 +272,8 @@ export class OpenAICompatProvider implements LlmProvider {
       "Content-Type": "application/json",
       ...this.extraHeaders,
     };
-    if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
+    if (this.bearerToken) headers.Authorization = `Bearer ${await this.bearerToken()}`;
+    else if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
 
     let res: Response;
     try {

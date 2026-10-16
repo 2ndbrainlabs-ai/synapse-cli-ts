@@ -74,6 +74,12 @@ export const LlmSettingsSchema = z
     tool_choice: z.boolean().optional(),
     max_tokens_field: z.enum(["max_tokens", "max_completion_tokens"]).optional(),
     temperature: z.boolean().optional(),
+    /** bedrock / vertex: cloud region (AWS region or Vertex location). */
+    region: z.string().min(1).optional(),
+    /** vertex: GCP project id. */
+    project: z.string().min(1).optional(),
+    /** bedrock: named AWS profile from ~/.aws/config. */
+    aws_profile: z.string().min(1).optional(),
     /** Set only by `--save-key`. Fernet, machine-bound. */
     api_key_prefix: z.string().optional(),
     api_key_encrypted: z.string().optional(),
@@ -170,6 +176,31 @@ export interface LlmOverrides {
   apiKey?: string | null;
   /** Back-compat: `--anthropic-key` implies provider=anthropic. */
   anthropicKey?: string | null;
+  /** bedrock / vertex: one-shot region / project / AWS profile. */
+  region?: string | null;
+  project?: string | null;
+  profile?: string | null;
+}
+
+/**
+ * Bedrock serves Claude 4.x only through cross-region inference profiles, whose
+ * ids carry a geography prefix. Derive it from the region so the defaults work
+ * wherever the user is. Exported for tests.
+ */
+export function bedrockGeo(region: string): string {
+  if (region.startsWith("us-gov-")) return "us-gov";
+  if (region.startsWith("us-") || region.startsWith("ca-")) return "us";
+  if (region.startsWith("eu-")) return "eu";
+  if (region.startsWith("ap-")) return "apac";
+  return "global";
+}
+
+function firstEnv(names: string[] | undefined): string {
+  for (const name of names ?? []) {
+    const v = (process.env[name] ?? "").trim();
+    if (v) return v;
+  }
+  return "";
 }
 
 export interface ResolvedLlm {
@@ -177,6 +208,10 @@ export interface ResolvedLlm {
   label: string;
   spec: ProviderSpec;
   baseUrl: string | null;
+  /** bedrock / vertex only; null otherwise. */
+  region: string | null;
+  project: string | null;
+  profile: string | null;
   apiKey: string | null;
   models: Record<Task, string>;
   caps: ProviderCaps;
@@ -274,6 +309,36 @@ export function resolveLlm(
     applicable?.base_url ||
     spec.baseUrl;
 
+  // --- cloud region / project / profile (bedrock, vertex) ---
+  let region: string | null = null;
+  let project: string | null = null;
+  let profile: string | null = null;
+  if (spec.cloud) {
+    region =
+      (overrides.region ?? "").trim() ||
+      (process.env.SYNAPSE_LLM_REGION ?? "").trim() ||
+      applicable?.region ||
+      firstEnv(spec.cloud.regionEnv) ||
+      spec.cloud.defaultRegion;
+    if (spec.cloud.projectEnv) {
+      project =
+        (overrides.project ?? "").trim() ||
+        (process.env.SYNAPSE_LLM_PROJECT ?? "").trim() ||
+        applicable?.project ||
+        firstEnv(spec.cloud.projectEnv) ||
+        null;
+      if (!project) {
+        problems.push(
+          `${spec.label} needs a GCP project. Set GOOGLE_CLOUD_PROJECT, or run ` +
+            `\`synapse model set ${providerId} --project <id>\`.`,
+        );
+      }
+    }
+    if (providerId === "bedrock") {
+      profile = (overrides.profile ?? "").trim() || applicable?.aws_profile || null;
+    }
+  }
+
   if (spec.kind === "openai-compat" && !baseUrl) {
     problems.push(
       `Provider "${providerId}" needs an endpoint. ` +
@@ -287,6 +352,10 @@ export function resolveLlm(
   const singleModel = flagModel || envModel;
 
   const models = { ...spec.defaults } as Record<Task, string>;
+  if (providerId === "bedrock" && region) {
+    const geo = bedrockGeo(region);
+    for (const task of TASKS) models[task] = models[task].replace("{geo}", geo);
+  }
   for (const task of TASKS) {
     const fromStore = applicable?.models?.[task];
     if (fromStore) models[task] = fromStore;
@@ -352,7 +421,10 @@ export function resolveLlm(
     providerId,
     label: spec.label,
     spec,
-    baseUrl: baseUrl || null,
+    baseUrl: spec.cloud ? null : baseUrl || null,
+    region,
+    project,
+    profile,
     apiKey,
     models,
     caps,
@@ -369,6 +441,11 @@ export function resolveLlm(
 // -----------------------------------------------------------------------------
 
 export function llmKeyDisplay(resolved: ResolvedLlm): string {
+  if (resolved.spec.cloud) {
+    return resolved.profile
+      ? `${resolved.spec.cloud.credentials}, profile "${resolved.profile}"`
+      : resolved.spec.cloud.credentials;
+  }
   if (!resolved.apiKey) {
     return resolved.spec.keyRequired ? "(not set)" : "(not required)";
   }

@@ -38,6 +38,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.32.0",
+    "@aws-sdk/client-bedrock-runtime": "^3.1152.0",
     "@grpc/grpc-js": "^1.10.0",
     "@grpc/proto-loader": "^0.7.0",
     "@inquirer/prompts": "^7.0.0",
@@ -45,6 +46,7 @@
     "cli-table3": "^0.6.0",
     "commander": "^12.0.0",
     "dotenv": "^16.4.0",
+    "google-auth-library": "^10.9.1",
     "ora": "^8.0.0",
     "tree-sitter": "^0.22.0",
     "tree-sitter-c-sharp": "^0.23.1",
