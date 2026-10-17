@@ -18,7 +18,9 @@ export type ProviderId =
   | "grok"
   | "openrouter"
   | "ollama"
-  | "custom";
+  | "custom"
+  | "bedrock"
+  | "vertex";
 
 /** Logical stage of the codegen pipeline. Maps to a model per provider. */
 export type Task = "triage" | "generate" | "verify" | "fallback_generate";

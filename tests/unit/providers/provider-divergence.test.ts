@@ -256,7 +256,7 @@ describe("endpoint construction", () => {
 describe("catalog invariants", () => {
   it("declares every provider the type union allows", () => {
     expect(PROVIDER_IDS.sort()).toEqual(
-      ["anthropic", "custom", "groq", "grok", "ollama", "openai", "openrouter"].sort(),
+      ["anthropic", "bedrock", "custom", "groq", "grok", "ollama", "openai", "openrouter", "vertex"].sort(),
     );
     for (const id of PROVIDER_IDS) expect(isProviderId(id)).toBe(true);
     expect(isProviderId("gpt6")).toBe(false);
@@ -268,7 +268,14 @@ describe("catalog invariants", () => {
       expect(spec.id).toBe(id);
       expect(spec.label.length).toBeGreaterThan(0);
       expect(spec.docsUrl).toMatch(/^https:\/\//);
-      expect(spec.apiKeyEnv.length).toBeGreaterThan(0);
+      // Cloud providers authenticate through their SDK's credential chain, so
+      // they deliberately declare no key env var — and must say how instead.
+      if (spec.cloud) {
+        expect(spec.apiKeyEnv).toEqual([]);
+        expect(spec.cloud.credentials.length).toBeGreaterThan(0);
+      } else {
+        expect(spec.apiKeyEnv.length).toBeGreaterThan(0);
+      }
     }
   });
 
@@ -305,21 +312,27 @@ describe("catalog invariants", () => {
   it("only waives the key requirement where a key is genuinely optional", () => {
     // Ollama ignores the key; a custom endpoint may be unauthenticated.
     const optional = PROVIDER_IDS.filter((id) => !PROVIDERS[id].keyRequired).sort();
-    expect(optional).toEqual(["custom", "ollama"]);
+    // Bedrock and Vertex need credentials too, but from AWS / Google, not Synapse.
+    expect(optional).toEqual(["bedrock", "custom", "ollama", "vertex"]);
   });
 
-  it("routes Anthropic through its own adapter and everything else through one", () => {
+  it("routes Anthropic, Bedrock and Vertex through their own adapters and everything else through one", () => {
     expect(PROVIDERS.anthropic.kind).toBe("anthropic");
-    for (const id of PROVIDER_IDS.filter((i) => i !== "anthropic")) {
+    expect(PROVIDERS.bedrock.kind).toBe("bedrock");
+    expect(PROVIDERS.vertex.kind).toBe("vertex");
+    const own = new Set<ProviderId>(["anthropic", "bedrock", "vertex"]);
+    for (const id of PROVIDER_IDS.filter((i) => !own.has(i))) {
       expect(PROVIDERS[id].kind).toBe("openai-compat");
     }
   });
 
-  it("claims prompt caching only for Anthropic", () => {
-    // The neutral `cache` hint is only honoured natively there; asserting this
+  it("claims prompt caching only where Claude is served natively", () => {
+    // The neutral `cache` hint is honoured by Anthropic, by Bedrock (cachePoint,
+    // for Claude/Nova) and by Vertex's Anthropic API. Asserting the exact set
     // stops a copy-paste from silently implying caching elsewhere.
+    const caching = new Set<ProviderId>(["anthropic", "bedrock", "vertex"]);
     for (const id of PROVIDER_IDS) {
-      expect(PROVIDERS[id].caps.promptCache).toBe(id === "anthropic");
+      expect(PROVIDERS[id].caps.promptCache).toBe(caching.has(id));
     }
   });
 });

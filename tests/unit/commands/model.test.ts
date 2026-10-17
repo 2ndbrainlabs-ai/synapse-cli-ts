@@ -246,3 +246,34 @@ describe("model reset", () => {
     expect(llm()).toBeUndefined();
   });
 });
+
+describe("model set — cloud providers", () => {
+  it("bedrock stores region and AWS profile, and no key", () => {
+    runModelSet("bedrock", { region: "eu-west-1", profile: "work" });
+    expect(llm()).toEqual({ provider: "bedrock", region: "eu-west-1", aws_profile: "work" });
+  });
+
+  it("vertex stores project and location", () => {
+    runModelSet("vertex", { project: "my-proj", region: "us-east5" });
+    expect(llm()).toEqual({ provider: "vertex", project: "my-proj", region: "us-east5" });
+  });
+
+  it("vertex accepts a Gemini model for every stage", () => {
+    runModelSet("vertex", { project: "p", model: "gemini-2.5-pro" });
+    expect((llm()!.models as Record<string, string>).generate).toBe("gemini-2.5-pro");
+  });
+
+  it("refuses --save-key, since cloud credentials never go through Synapse", () => {
+    runModelSet("bedrock", { saveKey: "AKIA..." });
+    expect(llm()).toBeUndefined();
+  });
+
+  it("refuses cloud flags on providers they don't apply to", () => {
+    runModelSet("groq", { region: "us-east-1" });
+    expect(llm()).toBeUndefined();
+    runModelSet("bedrock", { project: "p" });
+    expect(llm()).toBeUndefined();
+    runModelSet("vertex", { profile: "work" });
+    expect(llm()).toBeUndefined();
+  });
+});

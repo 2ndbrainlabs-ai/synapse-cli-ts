@@ -58,7 +58,15 @@ export interface ModelOptions {
   maxCompletionTokens?: boolean;
   /** Endpoint rejects `temperature`. */
   noTemperature?: boolean;
+  /** bedrock / vertex: region; vertex: GCP project; bedrock: AWS profile. */
+  region?: string;
+  project?: string;
+  profile?: string;
   globalScope?: boolean;
+}
+
+function saveKeyGiven(opts: ModelOptions): boolean {
+  return Boolean((opts.saveKey ?? "").trim());
 }
 
 function scopeOf(opts: ModelOptions): ConfigScope {
@@ -92,6 +100,8 @@ export function runModelShow(): void {
     { key: "API key", value: llmKeyDisplay(resolved) },
   ];
   if (resolved.baseUrl) rows.push({ key: "Endpoint", value: resolved.baseUrl });
+  if (resolved.region) rows.push({ key: "Region", value: resolved.region });
+  if (resolved.project) rows.push({ key: "Project", value: resolved.project });
   kvGrid(rows);
 
   console.log();
@@ -240,6 +250,40 @@ export function runModelSet(providerArg: string, opts: ModelOptions): void {
     return;
   }
 
+  // --- cloud region / project / profile ---
+  const cloudFlags = { region: opts.region, project: opts.project, profile: opts.profile };
+  if (!spec.cloud && Object.values(cloudFlags).some((v) => (v ?? "").trim())) {
+    roundedBox("Flag not supported", "✖", t.err, [
+      `--region / --project / --profile only apply to bedrock and vertex.`,
+    ]);
+    return;
+  }
+  if (spec.cloud) {
+    if (opts.region?.trim()) base.region = opts.region.trim();
+    if (opts.project?.trim()) {
+      if (providerId !== "vertex") {
+        roundedBox("Flag not supported", "✖", t.err, ["--project only applies to vertex."]);
+        return;
+      }
+      base.project = opts.project.trim();
+    }
+    if (opts.profile?.trim()) {
+      if (providerId !== "bedrock") {
+        roundedBox("Flag not supported", "✖", t.err, ["--profile only applies to bedrock."]);
+        return;
+      }
+      base.aws_profile = opts.profile.trim();
+    }
+    if (saveKeyGiven(opts)) {
+      roundedBox("No key needed", "✖", t.err, [
+        `${spec.label} uses your cloud credentials, not a Synapse-stored key.`,
+        "",
+        spec.cloud.credentials,
+      ]);
+      return;
+    }
+  }
+
   // --- models ---
   const perStage: Partial<Record<Task, string>> = { ...(base.models ?? {}) };
   const single = (opts.model ?? "").trim();
@@ -298,6 +342,8 @@ export function runModelSet(providerArg: string, opts: ModelOptions): void {
     { key: "generate", value: resolved.models.generate },
     { key: "triage", value: resolved.models.triage },
     ...(resolved.baseUrl ? [{ key: "endpoint", value: resolved.baseUrl }] : []),
+    ...(resolved.region ? [{ key: "region", value: resolved.region }] : []),
+    ...(resolved.project ? [{ key: "project", value: resolved.project }] : []),
     { key: "API key", value: llmKeyDisplay(resolved) },
   ]);
 
