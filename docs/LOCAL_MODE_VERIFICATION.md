@@ -14,7 +14,7 @@ Pick 5 test repos (FastAPI-shaped, ≥50 public functions each). Suggested: any 
 
 ## Checks
 
-1. **Hosted mode unchanged.** In a project init'd normally (no `--local`), `synapse build` still hits `grpc.synaps3.ai`. Regression tests pass unchanged: `npm test`.
+1. **Hosted mode unchanged.** In a project init'd normally (no `--local`), `synapse build` still hits `grpc.synapse.2ndbrainlabs.ai`. Regression tests pass unchanged: `npm test`.
 
 2. **`--local` is per-invocation.** `synapse init --local` is *not* a thing — it exits non-zero with `unknown option '--local'`. No project config pins a repo to local mode; `resolveEffectiveMode` reads the build flag only. Confirm `.synapse/config.json` never gains a `"mode": "local"` key.
 
@@ -28,9 +28,9 @@ Pick 5 test repos (FastAPI-shaped, ≥50 public functions each). Suggested: any 
 
 7. **No key on disk, ever.** After any `--local` run: `grep -r "sk-ant" ~/.synapse ./.synapse` returns nothing.
 
-8. **LLM trace forwarding.** Run with mitmproxy pointed at `api.synaps3.ai`. See one `POST /telemetry/llm-trace` per Anthropic call. Payload contains no prompt bodies or generated code — just tokens, hashes, timings.
+8. **LLM trace forwarding.** Run with mitmproxy pointed at `api.synapse.2ndbrainlabs.ai`. See one `POST /telemetry/llm-trace` per Anthropic call. Payload contains no prompt bodies or generated code — just tokens, hashes, timings.
 
-9. **Telemetry opt-out.** `SYNAPSE_TELEMETRY=0 synapse build --local` → zero outbound requests to `synaps3.ai`.
+9. **Telemetry opt-out.** `SYNAPSE_TELEMETRY=0 synapse build --local` → zero outbound requests to `synapse.2ndbrainlabs.ai`.
 
 10. **User's Anthropic quota.** After 3 local builds, the user's Anthropic dashboard shows the requests. Our infra shows nothing under their user_id.
 

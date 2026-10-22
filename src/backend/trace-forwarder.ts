@@ -1,7 +1,7 @@
 // src/backend/trace-forwarder.ts
 //
 // Metadata-only trace shipper for local-mode LLM calls.
-// POSTs to ${api_url}/telemetry/llm-trace on api.synaps3.ai. The ui-backend
+// POSTs to ${api_url}/telemetry/llm-trace on api.synapse.2ndbrainlabs.ai. The ui-backend
 // applies Langfuse credentials server-side and forwards to Langfuse — the
 // OSS package never contains Langfuse credentials.
 //

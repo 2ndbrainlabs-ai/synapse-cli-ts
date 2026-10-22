@@ -68,7 +68,7 @@ async function runHostedInit(workingDir: string, synapseDir: string): Promise<vo
   if (!rawKey) {
     console.log();
     console.log(
-      `  ${t.dim("Enter your Synapse API key")}  ${t.subtle("get one at synaps3.ai")}`,
+      `  ${t.dim("Enter your Synapse API key")}  ${t.subtle("get one at synapse.2ndbrainlabs.ai")}`,
     );
     console.log();
     const inputKey = await styledInput({
