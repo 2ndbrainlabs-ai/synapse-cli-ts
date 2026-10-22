@@ -37,6 +37,8 @@ Requires **Node.js 18+**. Verify with `synapse --version`.
 
 ## Quick start
 
+> Before running `synapse init`, generate your Synapse API key by following the [docs](https://synaps3.ai/docs#configuration).
+
 ```bash
 cd my-project
 synapse init                    # one-time: paste your API key
@@ -435,6 +437,14 @@ Please review our [Security Policy](https://github.com/2ndbrainlabs-ai/synapse-c
 ## License
 
 Licensed under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0). See [NOTICE](https://github.com/2ndbrainlabs-ai/synapse-cli/blob/main/NOTICE) for attribution.
+
+---
+
+## Star History
+
+<a href="https://star-history.com/#2ndbrainlabs-ai/synapse-cli-ts&Date">
+  <img src="https://api.star-history.com/svg?repos=2ndbrainlabs-ai/synapse-cli-ts&type=Date" alt="Star History Chart" width="600" />
+</a>
 
 ---
 

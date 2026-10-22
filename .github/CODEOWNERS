@@ -1,0 +1,11 @@
+# Global fallback — a code owner must review everything
+* @niranjanakella @yeseswisreeneeli
+
+# Source code
+src/** @niranjanakella @yeseswisreeneeli
+
+# Protobuf definitions
+protos/** @niranjanakella @yeseswisreeneeli
+
+# CI and GitHub config
+.github/** @niranjanakella @yeseswisreeneeli
