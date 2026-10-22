@@ -385,7 +385,7 @@ message TrackEventRequest {
 message TrackEventResponse {
   bool success = 1;
   bool quota_exceeded = 2;      // true if any quota limit has been reached
-  string quota_message = 3;     // e.g. "Contact synaps3.ai for extended limits."
+  string quota_message = 3;     // e.g. "Contact synapse.2ndbrainlabs.ai for extended limits."
   int32 mcp_servers_count = 4;  // Current MCP servers created
   int32 max_mcp_servers = 5;    // Maximum allowed MCP servers
   int64 lines_indexed = 6;      // Current lines indexed

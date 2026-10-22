@@ -68,7 +68,7 @@ export async function trackEvent(
 }
 
 // ---------------------------------------------------------------------------
-// REST-based quota functions (via api.synaps3.ai)
+// REST-based quota functions (via api.synapse.2ndbrainlabs.ai)
 // ---------------------------------------------------------------------------
 
 export async function checkQuota(
