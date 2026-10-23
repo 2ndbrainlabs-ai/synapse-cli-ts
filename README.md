@@ -8,7 +8,7 @@
 
 Turn any codebase into a production-ready [Model Context Protocol](https://modelcontextprotocol.io) server — from your terminal, in seconds.
 
-[Homepage](https://synaps3.ai) · [Docs](https://synaps3.ai/docs) · [Report an issue](https://github.com/2ndbrainlabs-ai/synapse-cli/issues) · [Discussions](https://github.com/2ndbrainlabs-ai/synapse-cli/discussions)
+[Homepage](https://synapse.2ndbrainlabs.ai) · [Docs](https://synapse.2ndbrainlabs.ai/docs) · [Report an issue](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/issues) · [Discussions](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/discussions)
 
 [![npm version](https://img.shields.io/npm/v/@2ndbrainlabs-ai/synapse-cli.svg?logo=npm&color=D97757)](https://www.npmjs.com/package/@2ndbrainlabs-ai/synapse-cli)
 [![node](https://img.shields.io/node/v/@2ndbrainlabs-ai/synapse-cli.svg?logo=node.js)](https://nodejs.org)
@@ -37,7 +37,7 @@ Requires **Node.js 18+**. Verify with `synapse --version`.
 
 ## Quick start
 
-> Before running `synapse init`, generate your Synapse API key by following the [docs](https://synaps3.ai/docs#configuration).
+> Before running `synapse init`, generate your Synapse API key by following the [docs](https://synapse.2ndbrainlabs.ai/docs#configuration).
 
 ```bash
 cd my-project
@@ -67,7 +67,7 @@ synapse build --local           # generates locally on your own key
 
 `--local` is a **per-invocation** flag — no project config pins a repo to local mode, so switching back is just dropping the flag. `synapse init` is not required for a local build.
 
-Locally-generated servers don't count against any quota; analyze runs are unbounded. Anonymous usage telemetry (no code, no prompts — just event names + counts) still flows to `api.synaps3.ai`; opt out with `SYNAPSE_TELEMETRY=0`.
+Locally-generated servers don't count against any quota; analyze runs are unbounded. Anonymous usage telemetry (no code, no prompts — just event names + counts) still flows to `api.synapse.2ndbrainlabs.ai`; opt out with `SYNAPSE_TELEMETRY=0`.
 
 **Local-mode limits:**
 - Python target only (TypeScript target follows).
@@ -375,11 +375,24 @@ Add `--dev` to any command to talk to a local backend on `localhost:50051`.
 
 Config is resolved in this order:
 
-1. Environment variables (`SYNAPSE_API_KEY`, `SYNAPSE_BACKEND_URL`, `SYNAPSE_DEV=1`)
+1. Environment variables (`SYNAPSE_API_KEY`, `SYNAPSE_BACKEND_URL`, `SYNAPSE_API_URL`, `SYNAPSE_DEV=1`)
 2. Project-local `./.synapse/config.json`
 3. Global `~/.synapse/config.json`
 
-This covers the hosted service. The inference provider used by `--local` builds is configured separately — see [Config schema](#config-schema) and [Providing your API key](#providing-your-api-key).
+This covers the hosted service.
+
+### Default endpoints
+
+| Service | Default | Override |
+| --- | --- | --- |
+| gRPC backend | `grpc.synapse.2ndbrainlabs.ai:443` | `SYNAPSE_BACKEND_URL` |
+| REST API (quota, telemetry) | `https://api.synapse.2ndbrainlabs.ai` | `SYNAPSE_API_URL` |
+| Hosted MCP servers | `https://mcp.synapse.2ndbrainlabs.ai` | — |
+| Console | `https://synapse.2ndbrainlabs.ai` | — |
+
+Since 0.1.7 these replace the earlier `*.synaps3.ai` hostnames. The old hostnames keep serving for now, so a `SYNAPSE_BACKEND_URL` / `SYNAPSE_API_URL` that still points at them keeps working; switch to the new names when convenient.
+
+The inference provider used by `--local` builds is configured separately — see [Config schema](#config-schema) and [Providing your API key](#providing-your-api-key).
 
 ## How `build` works
 
@@ -410,14 +423,14 @@ Every tool call is scoped to `process.cwd()`. Only the specific bytes the agent 
 
 ## Documentation
 
-- **Getting started** — [synaps3.ai/docs](https://synaps3.ai/docs)
-- **API reference** — [synaps3.ai/docs/api](https://synaps3.ai/docs/api)
+- **Getting started** — [synapse.2ndbrainlabs.ai/docs](https://synapse.2ndbrainlabs.ai/docs)
+- **API reference** — [synapse.2ndbrainlabs.ai/docs/api](https://synapse.2ndbrainlabs.ai/docs/api)
 - **Examples** — [github.com/2ndbrainlabs-ai/synapse-examples](https://github.com/2ndbrainlabs-ai/synapse-examples)
 
 ## Development
 
 ```bash
-git clone https://github.com/2ndbrainlabs-ai/synapse-cli.git
+git clone https://github.com/2ndbrainlabs-ai/synapse-cli-ts.git
 cd synapse-cli
 npm install
 npm run dev -- <command>        # run against source
@@ -428,15 +441,15 @@ npm run typecheck
 
 ## Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](https://github.com/2ndbrainlabs-ai/synapse-cli/blob/main/CONTRIBUTING.md) for how to file issues, run the test suite, and open a PR. All participation is subject to our [Code of Conduct](https://github.com/2ndbrainlabs-ai/synapse-cli/blob/main/CODE_OF_CONDUCT.md).
+Contributions are welcome. See [CONTRIBUTING.md](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/blob/main/CONTRIBUTING.md) for how to file issues, run the test suite, and open a PR. All participation is subject to our [Code of Conduct](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/blob/main/CODE_OF_CONDUCT.md).
 
 ## Security
 
-Please review our [Security Policy](https://github.com/2ndbrainlabs-ai/synapse-cli/blob/main/SECURITY.md) before reporting vulnerabilities.
+Please review our [Security Policy](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/blob/main/SECURITY.md) before reporting vulnerabilities.
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0). See [NOTICE](https://github.com/2ndbrainlabs-ai/synapse-cli/blob/main/NOTICE) for attribution.
+Licensed under the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0). See [NOTICE](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/blob/main/NOTICE) for attribution.
 
 ---
 

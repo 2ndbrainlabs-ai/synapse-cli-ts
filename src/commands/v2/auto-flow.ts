@@ -56,7 +56,7 @@ export interface AutoFlowOptions {
   /** --smart-names: have the backend read handler source (+ readme context)
    *  and name/describe tools from real behavior instead of route + docstring
    *  alone. Runs server-side (billed) — nothing changes on the CLI's own
-   *  compute, only the request sent to synapse-ui-backend/grpc.synaps3.ai. */
+   *  compute, only the request sent to synapse-ui-backend/grpc.synapse.2ndbrainlabs.ai. */
   smartNames?: boolean;
 }
 

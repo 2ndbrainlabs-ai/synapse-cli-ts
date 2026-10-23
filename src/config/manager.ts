@@ -23,7 +23,7 @@ export interface SynapseConfig {
   api_key_encrypted?: string;
   /**
    * Execution mode for this project.
-   *   "hosted" (default) — talks to grpc.synaps3.ai
+   *   "hosted" (default) — talks to grpc.synapse.2ndbrainlabs.ai
    *   "local"            — in-process codegen via src/backend/, user's Anthropic key
    */
   mode?: "hosted" | "local";
@@ -241,7 +241,7 @@ export function getApiUrl(): string {
   const envUrl = (process.env.SYNAPSE_API_URL ?? "").trim();
   if (envUrl) return envUrl;
   const cfg = loadRootConfig();
-  return (cfg.api_url ?? "").trim() || "https://api.synaps3.ai";
+  return (cfg.api_url ?? "").trim() || "https://api.synapse.2ndbrainlabs.ai";
 }
 
 // -----------------------------------------------------------------------------

@@ -24,7 +24,7 @@ By participating in this project you agree to abide by our [Code of Conduct](./C
 ## Development setup
 
 ```bash
-git clone https://github.com/2ndbrainlabs-ai/synapse-cli.git
+git clone https://github.com/2ndbrainlabs-ai/synapse-cli-ts.git
 cd synapse-cli
 npm install
 npm run build
