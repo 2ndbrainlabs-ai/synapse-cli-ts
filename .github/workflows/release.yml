@@ -1,0 +1,96 @@
+name: Release
+
+# Release flow (see docs/RELEASING.md):
+#   1. Every push to main runs release-please, which opens or updates a
+#      "chore(main): release x.y.z" PR built from the Conventional Commit
+#      history (version bump, CHANGELOG.md, config.json version).
+#   2. Merging that release PR makes release-please tag vX.Y.Z and create the
+#      GitHub Release; the publish job then ships the tag to npm with provenance.
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Jobs declare only the permissions they need.
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Release PR / tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  publish:
+    name: Publish to npm
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-latest
+    # Protect publishing via Settings -> Environments -> npm (e.g. required reviewers).
+    # The npm Trusted Publisher must be configured with this environment name.
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write # npm Trusted Publishing (OIDC) and provenance
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+          # No dependency cache on the release path.
+          package-manager-cache: false
+
+      - name: Ensure npm supports Trusted Publishing (>= 11.5.1)
+        run: |
+          npm install -g npm@^11.5.1
+          npm --version
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Lint, typecheck, test, build
+        run: npm run ci
+
+      - name: Verify package version matches the release tag
+        env:
+          TAG_NAME: ${{ needs.release-please.outputs.tag_name }}
+          RELEASE_VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          PKG_VERSION="$(node -p "require('./package.json').version")"
+          echo "tag=${TAG_NAME} release=${RELEASE_VERSION} package.json=${PKG_VERSION}"
+          if [ "v${PKG_VERSION}" != "${TAG_NAME}" ] || [ "${PKG_VERSION}" != "${RELEASE_VERSION}" ]; then
+            echo "::error::package.json version (${PKG_VERSION}) does not match release tag (${TAG_NAME})"
+            exit 1
+          fi
+
+      - name: Publish to npm
+        # Uses npm Trusted Publishing (OIDC) when configured on npmjs.com.
+        # Fallback: if the repo secret NPM_TOKEN exists it is used as the auth
+        # token; when unset this is empty and OIDC is used.
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --provenance --access public
