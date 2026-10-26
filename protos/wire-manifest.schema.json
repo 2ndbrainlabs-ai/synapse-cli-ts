@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://synaps3.ai/schemas/wire-manifest.json",
+  "$id": "https://synapse.2ndbrainlabs.ai/schemas/wire-manifest.json",
   "title": "SurfaceManifest (wire)",
   "description": "The exact shape the CLI sends to the backend inside custom_tool_request.manifest_json and classify_request.manifest_json. Both sides validate against this file so a field addition on one side fails CI until the other side is updated.",
   "type": "object",

@@ -2,13 +2,13 @@
   "name": "@2ndbrainlabs-ai/synapse-cli",
   "version": "0.1.6",
   "description": "Agentic MCP server generator — the first piece of Synapse's Enterprise Context Engine",
-  "homepage": "https://synaps3.ai",
+  "homepage": "https://synapse.2ndbrainlabs.ai",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/2ndbrainlabs-ai/synapse-cli.git"
+    "url": "git+https://github.com/2ndbrainlabs-ai/synapse-cli-ts.git"
   },
   "bugs": {
-    "url": "https://github.com/2ndbrainlabs-ai/synapse-cli/issues"
+    "url": "https://github.com/2ndbrainlabs-ai/synapse-cli-ts/issues"
   },
   "type": "module",
   "bin": {

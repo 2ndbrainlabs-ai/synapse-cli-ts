@@ -178,7 +178,7 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     },
     caps: OPENAI_COMPAT_CAPS,
     headers: {
-      "HTTP-Referer": "https://synaps3.ai",
+      "HTTP-Referer": "https://synapse.2ndbrainlabs.ai",
       "X-Title": "Synapse CLI",
     },
   },
@@ -275,7 +275,7 @@ export const PROVIDERS: Record<ProviderId, ProviderSpec> = {
     baseUrl: null, // user must supply --base-url
     apiKeyEnv: ["SYNAPSE_LLM_API_KEY"],
     keyRequired: false,
-    docsUrl: "https://github.com/2ndbrainlabs-ai/synapse-cli",
+    docsUrl: "https://github.com/2ndbrainlabs-ai/synapse-cli-ts",
     defaults: {
       triage: "",
       generate: "",
