@@ -18,40 +18,7 @@ import { installationId } from "./trace-forwarder.js";
 import { nameAndDescribeEndpoints, type EndpointContext } from "./endpoint-namer.js";
 import type { SurfaceManifest } from "../extractors/core/surface-manifest.js";
 import type { FunctionVerdict } from "./schemas.js";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, join } from "node:path";
-
-// Read the CLI version from package.json for trace records.
-let _cliVersion: string | null = null;
-function readCliVersion(): string {
-  if (_cliVersion) return _cliVersion;
-  try {
-    const here = dirname(fileURLToPath(import.meta.url));
-    // At runtime this file lives at dist/backend/index.js or dist/index.js;
-    // package.json is one or two directories up.
-    for (const candidate of [
-      join(here, "..", "package.json"),
-      join(here, "..", "..", "package.json"),
-      join(here, "..", "..", "..", "package.json"),
-    ]) {
-      try {
-        const raw = readFileSync(candidate, "utf-8");
-        const pkg = JSON.parse(raw) as { version?: string };
-        if (pkg.version) {
-          _cliVersion = pkg.version;
-          return _cliVersion;
-        }
-      } catch {
-        // try next
-      }
-    }
-  } catch {
-    // fall through
-  }
-  _cliVersion = "0.0.0";
-  return _cliVersion;
-}
+import { readCliVersion } from "../utils/version.js";
 
 function generateSessionId(): string {
   const rand = Math.random().toString(36).slice(2, 8);
