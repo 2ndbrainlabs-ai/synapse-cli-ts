@@ -18,7 +18,7 @@ vi.mock("../../../src/utils/version.js", async (importOriginal) => {
   };
 });
 
-import { trackEvent } from "../../../src/grpc/telemetry.js";
+import { trackEvent, verifyApiKey } from "../../../src/grpc/telemetry.js";
 import { readCliVersion } from "../../../src/utils/version.js";
 
 const PKG_VERSION = (
@@ -85,5 +85,110 @@ describe("trackEvent cli_version", () => {
   it("never throws when the request fails", async () => {
     fetchMock.mockRejectedValue(new Error("network down"));
     await expect(trackEvent("build", "syn_key", "/tmp/project")).resolves.toBeUndefined();
+  });
+});
+
+// Build outcome fields (SYN-314). Older ui-backends ignore unknown fields.
+describe("trackEvent build outcome", () => {
+  const saved = {
+    api: process.env.SYNAPSE_API_URL,
+    telemetry: process.env.SYNAPSE_TELEMETRY,
+  };
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  function sentBody(): Record<string, unknown> {
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    return JSON.parse(init.body as string) as Record<string, unknown>;
+  }
+
+  beforeEach(() => {
+    process.env.SYNAPSE_API_URL = "https://api.example.test";
+    delete process.env.SYNAPSE_TELEMETRY;
+    fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (saved.api === undefined) delete process.env.SYNAPSE_API_URL;
+    else process.env.SYNAPSE_API_URL = saved.api;
+    if (saved.telemetry === undefined) delete process.env.SYNAPSE_TELEMETRY;
+    else process.env.SYNAPSE_TELEMETRY = saved.telemetry;
+  });
+
+  it("sends success, language and duration for a successful build", async () => {
+    await trackEvent("build", "syn_key", "/tmp/p", 0, 2, 11, 1234.6, "hosted", {
+      success: true,
+      language: "python",
+    });
+    const body = sentBody();
+    expect(body.success).toBe(true);
+    expect(body.language).toBe("python");
+    expect(body.duration_ms).toBe(1235);
+    expect(body.tool_count).toBe(2);
+    expect(body.candidate_count).toBe(11);
+    expect(body).not.toHaveProperty("error_code");
+  });
+
+  it("sends success=false and the error code for a failed build", async () => {
+    await trackEvent("build", "syn_key", "/tmp/p", 0, 0, 4, 50, "hosted", {
+      success: false,
+      errorCode: "AUTH_INVALID",
+    });
+    const body = sentBody();
+    expect(body.success).toBe(false);
+    expect(body.error_code).toBe("AUTH_INVALID");
+  });
+
+  it("leaves outcome fields out of events that don't set them", async () => {
+    await trackEvent("init", "syn_key", "/tmp/p");
+    const body = sentBody();
+    expect(body).not.toHaveProperty("success");
+    expect(body).not.toHaveProperty("error_code");
+  });
+});
+
+// `synapse init` key check (SYN-314) — offline-tolerant.
+describe("verifyApiKey", () => {
+  const savedApi = process.env.SYNAPSE_API_URL;
+  beforeEach(() => {
+    process.env.SYNAPSE_API_URL = "https://api.example.test/";
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (savedApi === undefined) delete process.env.SYNAPSE_API_URL;
+    else process.env.SYNAPSE_API_URL = savedApi;
+  });
+
+  it("calls /quota with the key and reports valid on 200", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(verifyApiKey("syn_key")).resolves.toBe("valid");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.example.test/quota");
+    expect((init.headers as Record<string, string>).Authorization).toBe("Bearer syn_key");
+  });
+
+  it("reports rejected on 401", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })));
+    await expect(verifyApiKey("bad")).resolves.toBe("rejected");
+  });
+
+  it("reports unknown when the backend is down or unreachable", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 503 })));
+    await expect(verifyApiKey("k")).resolves.toBe("unknown");
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new TypeError("fetch failed")));
+    await expect(verifyApiKey("k")).resolves.toBe("unknown");
+  });
+
+  it("checks the key even with telemetry disabled", async () => {
+    process.env.SYNAPSE_TELEMETRY = "0";
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })));
+    try {
+      await expect(verifyApiKey("bad")).resolves.toBe("rejected");
+    } finally {
+      delete process.env.SYNAPSE_TELEMETRY;
+    }
   });
 });

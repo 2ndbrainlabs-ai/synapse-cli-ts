@@ -70,6 +70,20 @@ The free tier includes **10 MCP servers and 100,000 indexed lines**. `synapse in
 
 Without a flag, the picker defaults to Auto. `--smart-names` (Auto only) reads each selected handler's source plus your README to give the tools better names and descriptions.
 
+### Scripts and CI
+
+Auto mode asks which endpoints to expose. Where there's no terminal (CI, pipes, `--yes`), select them with a flag instead; either flag implies `--auto`:
+
+```bash
+synapse build --auto --all-endpoints                                  # every detected endpoint
+synapse build --auto --endpoints "GET /patients,POST /patients"       # by method and path
+synapse build --auto --endpoints "/patients,get_patient_by_id"        # by path or tool name
+```
+
+Without a terminal and without either flag, the build stops with an error instead of exposing nothing.
+
+`synapse build` exits non-zero whenever the build doesn't finish: a failed composition, no endpoints selected, an invalid API key, an unreachable backend, a server error, or a scan paused by `--max-time` or Ctrl-C (resume with `--resume`).
+
 The legacy **v1 engine** is still available with `--engine v1`. It needs `synapse analyze` first, analyzes Python only, runs only on the hosted service, and writes `./mcp_server.py` (change with `-o`).
 
 ## Run locally with your own model
@@ -379,8 +393,9 @@ Use `--global` to apply any of this to `~/.synapse` instead of the current proje
 
 | Command | Purpose |
 |---|---|
-| `synapse init [--force]` | Initialize Synapse in the current project. Prompts for API key. |
+| `synapse init [--force]` | Initialize Synapse in the current project. Uses the key from `SYNAPSE_API_KEY`, the project or `~/.synapse` (or prompts for one) and checks it with the backend. |
 | `synapse build [--auto \| --custom] [-q <query>] [--smart-names] [--local] [--resume]` | Generate an MCP server with the v2 engine. Without `--auto`/`--custom`, asks which mode. `-q` describes the Custom-mode tool. |
+| `synapse build --auto [--all-endpoints \| --endpoints <list>]` | Pick Auto-mode endpoints without the interactive picker (for CI). `<list>` is comma-separated `"METHOD /path"`, `/path` or tool names. |
 | `synapse build --engine v1 [-q <query>] [-o <file>] [--no-validate] [--no-docs] [-g]` | Legacy v1 engine (hosted, Python only). Needs `synapse analyze` first. |
 | `synapse analyze [-o <dir>] [-v]` | Scan Python code and write the symbol/schema map the v1 engine uses. |
 | `synapse config [--update] [--key <k>] [--global]` | View or update config. |
@@ -458,6 +473,9 @@ Hosted Auto mode writes no file for any language: the hosted runner serves the t
 | `Not Initialized` on `build` | Run `synapse init` |
 | `Analysis Required` (with `--engine v1`) | Run `synapse analyze` |
 | `Quota Exceeded` | Check `synapse info`. The free tier allows 10 MCP servers and 100,000 indexed lines. |
+| `Your Synapse API key is invalid or expired` `[AUTH_INVALID]` | Save a valid key with `synapse config --key <KEY>`, or set `SYNAPSE_API_KEY` (it overrides saved keys). |
+| `Endpoint Selection Required` | No terminal to pick endpoints in. Pass `--all-endpoints` or `--endpoints <list>`. |
+| `The Synapse server hit an internal error` `[SERVER_ERROR]` | A server-side problem, not your code or key. Report it with the `Session:` id. |
 | Backend error mid-build | The CLI retries transient errors. Quote the `Session:` id when opening an issue. |
 
 ## Documentation

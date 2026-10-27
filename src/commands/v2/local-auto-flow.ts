@@ -11,11 +11,13 @@ import path from "node:path";
 import { input } from "@inquirer/prompts";
 import type { HttpEndpoint, SurfaceManifest } from "../../extractors/core/surface-manifest.js";
 import type { ResolvedLlm } from "../../config/llm-config.js";
-import { pickEndpoints } from "./endpoint-picker.js";
+import { selectEndpoints, type EndpointSelectionFlags } from "./endpoint-picker.js";
 import { writeWithSuffix, mergeEnvExample } from "./custom-flow.js";
 import { t, stepInfo, sectionHeader } from "../../ui/theme.js";
 import { roundedBox } from "../../ui/box.js";
 import { Spinner } from "../../ui/spinner.js";
+import { canPrompt } from "../../ui/prompt.js";
+import { BuildFailure, OUTCOME_CODES, type BuildReport } from "./build-outcome.js";
 
 export interface LocalAutoFlowOptions {
   workingDir: string;
@@ -30,10 +32,15 @@ export interface LocalAutoFlowOptions {
   /** --smart-names: browse handler source (+ README/docs) to name/describe
    *  tools from real behavior instead of route + docstring alone. */
   smartNames?: boolean;
+  /** --all-endpoints / --endpoints: select endpoints without the picker. */
+  selection?: EndpointSelectionFlags;
+  /** Outcome counters read by build telemetry. */
+  report?: BuildReport;
 }
 
 export async function runLocalAutoFlow(opts: LocalAutoFlowOptions): Promise<void> {
   const endpoints = opts.manifest.endpoints;
+  if (opts.report) opts.report.candidateCount = endpoints.length;
 
   if (endpoints.length === 0) {
     roundedBox("No Endpoints Found", "⚠", t.warn, [
@@ -42,7 +49,7 @@ export async function runLocalAutoFlow(opts: LocalAutoFlowOptions): Promise<void
       "Try:",
       "  " + t.cmd("synapse build --local --custom") + " — compose internal functions",
     ]);
-    return;
+    throw new BuildFailure(OUTCOME_CODES.NO_ENDPOINTS);
   }
 
   stepInfo(
@@ -50,20 +57,20 @@ export async function runLocalAutoFlow(opts: LocalAutoFlowOptions): Promise<void
     `${endpoints.length} endpoint${endpoints.length === 1 ? "" : "s"} (${opts.manifest.framework ?? "unknown framework"})`,
   );
 
-  const selected = await pickEndpoints(endpoints);
-  if (selected.length === 0) {
-    stepInfo("No endpoints selected", "aborting");
-    return;
-  }
+  const selected = await selectEndpoints(endpoints, opts.selection ?? {});
+  if (opts.report) opts.report.toolCount = selected.length;
 
+  // No terminal → leave the base URL for the env file (same as a blank answer).
   const baseUrl =
     opts.baseUrl ??
-    (
-      await input({
-        message: "Where is this API deployed? (leave blank to set later via env)",
-        default: "",
-      })
-    ).trim();
+    (canPrompt()
+      ? (
+          await input({
+            message: "Where is this API deployed? (leave blank to set later via env)",
+            default: "",
+          })
+        ).trim()
+      : "");
 
   const serverName = opts.serverName ?? path.basename(opts.workingDir);
 

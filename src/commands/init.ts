@@ -4,17 +4,18 @@ import path from "node:path";
 import {
   ensureGlobalSynapseDir,
   ensureProjectSynapseDir,
-  hasGlobalApiKey,
   isInitialized,
   loadConfig,
-  resolveApiKey,
+  resolveApiKeyWithSource,
   saveConfig,
   setGlobalApiKey,
   setProjectApiKey,
+  type ApiKeySource,
 } from "../config/manager.js";
 import { getProjectSynapseDir } from "../config/paths.js";
-import { t, stepOk } from "../ui/theme.js";
+import { t, stepOk, stepInfo } from "../ui/theme.js";
 import { roundedBox } from "../ui/box.js";
+import { apiKeySourceLabel } from "../ui/errors.js";
 import { displayBanner, displayHeader, displayWelcome } from "../ui/banner.js";
 import { styledInput } from "../ui/styled-input.js";
 
@@ -56,13 +57,16 @@ export async function runInit(opts: RunInitOptions): Promise<void> {
 
 async function runHostedInit(workingDir: string, synapseDir: string): Promise<void> {
   let rawKey: string | null = null;
+  let keySource: ApiKeySource | "entered" = "entered";
 
-  if (hasGlobalApiKey()) {
-    rawKey = resolveApiKey();
-    if (rawKey) {
-      stepOk("Using existing global API key");
-      setProjectApiKey(workingDir, rawKey);
-    }
+  const existing = resolveApiKeyWithSource(workingDir);
+  if (existing) {
+    rawKey = existing.key;
+    keySource = existing.source;
+    stepOk(`Using existing API key from ${apiKeySourceLabel(existing.source)}`);
+    // Copy a saved global key into this project, as before. A key from the
+    // environment is used as-is and never written to disk.
+    if (existing.source === "global") setProjectApiKey(workingDir, rawKey);
   }
 
   if (!rawKey) {
@@ -89,6 +93,8 @@ async function runHostedInit(workingDir: string, synapseDir: string): Promise<vo
     stepOk("API key saved", "encrypted");
   }
 
+  await checkApiKey(rawKey, keySource);
+
   // Stamp mode: "hosted" on the project config so it's explicit.
   const configPath = path.join(synapseDir, "config.json");
   if (!fs.existsSync(configPath)) {
@@ -112,4 +118,38 @@ async function runHostedInit(workingDir: string, synapseDir: string): Promise<vo
   }
 
   displayWelcome(["synapse analyze", "synapse build", "synapse info"]);
+}
+
+/**
+ * Check the key against the backend (GET /quota) so a bad key shows up now
+ * rather than mid-build. Offline-tolerant: if the backend can't be reached
+ * the key is kept and init carries on.
+ */
+async function checkApiKey(rawKey: string, source: ApiKeySource | "entered"): Promise<void> {
+  const { verifyApiKey } = await import("../grpc/telemetry.js");
+  const result = await verifyApiKey(rawKey);
+
+  if (result === "valid") {
+    stepOk("API key verified");
+    return;
+  }
+  if (result === "unknown") {
+    stepInfo("Couldn't reach Synapse to verify the API key", "continuing offline");
+    return;
+  }
+
+  const from = source === "entered" ? "you entered" : `from ${apiKeySourceLabel(source)}`;
+  const fix =
+    source === "env"
+      ? [
+          `${t.cmd("SYNAPSE_API_KEY")} overrides saved keys. Set it to a valid key,`,
+          "or unset it to use a saved one.",
+        ]
+      : [`Save a valid key with ${t.cmd("synapse config --key <KEY>")}, or set ${t.cmd("SYNAPSE_API_KEY")}.`];
+  roundedBox("API Key Rejected", "⚠", t.warn, [
+    `Synapse rejected the API key ${from}.`,
+    "It may be invalid, expired or revoked — builds will fail until it's replaced.",
+    "",
+    ...fix,
+  ]);
 }

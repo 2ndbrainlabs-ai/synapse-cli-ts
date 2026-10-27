@@ -90,6 +90,19 @@ export class CodeGenerationUI {
   }
 
   complete(): void {
+    this.clear();
+    const elapsed = fmtDuration(Date.now() - this.startTime);
+    console.log(`  ${t.ok("✓")}  ${t.text("Generation complete")}  ${t.dim(elapsed)}`);
+  }
+
+  /** Stop without claiming success — the caller renders the error next. */
+  fail(): void {
+    this.clear();
+    const elapsed = fmtDuration(Date.now() - this.startTime);
+    console.log(`  ${t.err("✗")}  ${t.text("Generation failed")}  ${t.dim(elapsed)}`);
+  }
+
+  private clear(): void {
     this.stop();
     // Clear the animation area
     if (!t.env.noAnimation && this.totalRenderedLines > 0) {
@@ -99,8 +112,6 @@ export class CodeGenerationUI {
       }
       process.stdout.write(`\x1b[${this.totalRenderedLines}A`);
     }
-    const elapsed = fmtDuration(Date.now() - this.startTime);
-    console.log(`  ${t.ok("✓")}  ${t.text("Generation complete")}  ${t.dim(elapsed)}`);
   }
 
   // -------------------------------------------------------------------------
