@@ -25,7 +25,7 @@ Synapse is building the context layer enterprises need to make their internal sy
 
 Synapse is a CLI that reads your codebase and generates a runnable MCP server — the tool schemas, argument marshalling, and boilerplate are all handled for you. Point it at a project, describe what you want exposed, and drop the resulting server into Claude Desktop, Cursor, or any MCP-compatible client.
 
-The CLI does source exploration **client-side** — nothing is uploaded. Generation runs on the Synapse backend by default, so model routing, retries, and quota stay centrally managed — or entirely on your own model with `--local`, using Anthropic, OpenAI, Groq, xAI, OpenRouter, Ollama, Amazon Bedrock, Google Vertex AI, or your own inference endpoint. See [Run locally with your own model](#run-locally-with-your-own-model).
+The CLI scans your code **client-side**: language detection and route/function extraction run on your machine with tree-sitter. Generation runs on the Synapse backend by default, so model routing, retries, and quota stay centrally managed — or entirely on your own model with `--local`, using Anthropic, OpenAI, Groq, xAI, OpenRouter, Ollama, Amazon Bedrock, Google Vertex AI, or your own inference endpoint. Some of what the scan finds (routes, function signatures, docstrings and, with `--smart-names`, handler source) is sent to the backend or to your model to do the generation. See [What leaves your machine](#what-leaves-your-machine) and [Run locally with your own model](#run-locally-with-your-own-model).
 
 ## Install
 
@@ -42,21 +42,39 @@ Requires **Node.js 18+**. Verify with `synapse --version`.
 ```bash
 cd my-project
 synapse init                    # one-time: paste your API key
-synapse analyze                 # scans code, writes .synapse/schema.json
-synapse build                   # discovers use cases, prompts you to pick
+synapse build                   # scans the code, then asks: Auto or Custom?
 ```
 
-The generated server lands at `./mcp_server.py`. Copy the printed JSON snippet into your MCP client config and you're done.
+`synapse build` asks how you want to build (skip the prompt with `--auto` or `--custom`). Copy the printed JSON snippet into your MCP client config and you're done.
 
-Prefer to describe it yourself:
+Prefer to describe the tool yourself (Custom mode):
 
 ```bash
-synapse build --query "Expose user auth and profile lookup as MCP tools"
+synapse build --custom --query "Expose user auth and profile lookup as one MCP tool"
 ```
+
+The free tier includes **10 MCP servers and 100,000 indexed lines**. `synapse info` shows your current usage.
+
+## Build modes: Auto and Custom
+
+`synapse build` runs the **v2 engine** by default. It detects your project's language, extracts its surface locally, and then builds in one of two modes:
+
+| | **Auto** (`--auto`) | **Custom** (`--custom`) |
+|---|---|---|
+| What it does | Finds your HTTP routes and exposes the ones you pick as MCP tools that call your deployed API | Composes internal functions you pick (or describe with `--query`) into one MCP tool |
+| Languages it reads | 6: Python, TypeScript (`.ts`, `.tsx`), Java, C#, Go, Rust | Python only, today |
+| Hosted output | No file is written. The endpoint config is saved to your Synapse account and served by the `@2ndbrainlabs-ai/synapse-mcp` runner (`npx`) | A Python file, `<tool_name>_server.py`, in the project root |
+| `--local` output | A Python file, `synapse_auto_server.py`. Python projects only; for other languages `--local --smart-names` names the tools but writes no file | A Python file, `<tool_name>_server.py`. Python projects only |
+
+**Every generated server file is Python.** The CLI does not generate TypeScript or JavaScript servers. Plain JavaScript files (`.js`, `.jsx`) are not scanned. If the project root has a marker file (`pyproject.toml`, `requirements.txt`, `tsconfig.json`, `pom.xml`, `go.mod`, `Cargo.toml`, …) it decides the language; otherwise the most common source extension wins.
+
+Without a flag, the picker defaults to Auto. `--smart-names` (Auto only) reads each selected handler's source plus your README to give the tools better names and descriptions.
+
+The legacy **v1 engine** is still available with `--engine v1`. It needs `synapse analyze` first, analyzes Python only, runs only on the hosted service, and writes `./mcp_server.py` (change with `-o`).
 
 ## Run locally with your own model
 
-Skip the hosted Synapse service entirely — codegen runs in-process using **your** inference provider. No quota, no code upload, no signup required.
+Skip the hosted Synapse service entirely — codegen runs in-process using **your** inference provider. No quota and no signup required. Your code never goes to Synapse; the parts the model needs go to the provider you choose (see [What leaves your machine](#what-leaves-your-machine)).
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-…
@@ -67,11 +85,12 @@ synapse build --local           # generates locally on your own key
 
 `--local` is a **per-invocation** flag — no project config pins a repo to local mode, so switching back is just dropping the flag. `synapse init` is not required for a local build.
 
-Locally-generated servers don't count against any quota; analyze runs are unbounded. Anonymous usage telemetry (no code, no prompts — just event names + counts) still flows to `api.synapse.2ndbrainlabs.ai`; opt out with `SYNAPSE_TELEMETRY=0`.
+Locally-generated servers don't count against any quota. Anonymous usage telemetry (no code, no prompts — event names, counts, token usage and hashed ids) still flows to `api.synapse.2ndbrainlabs.ai`; opt out with `SYNAPSE_TELEMETRY=0`.
 
 **Local-mode limits:**
-- Python target only (TypeScript target follows).
-- Auto flow (`--auto`) requires the hosted service. Use `--custom` (the default in local mode).
+- Generated files are Python, and only Python projects get one. Auto mode on a TypeScript, Java, C#, Go or Rust project can name the tools (`--smart-names`) but writes no file; run it without `--local` to use the hosted runner instead.
+- Both modes work locally. Auto (`--auto`) writes a passthrough server without calling a model (unless you add `--smart-names`); Custom (`--custom`) uses your model to compose the tool.
+- The legacy v1 engine (`--engine v1`) is hosted-only.
 - Provider selection applies to local mode **only** — hosted builds run on the Synapse service, and `synapse model` does not change them.
 
 ### Choosing a provider
@@ -268,7 +287,7 @@ A key is optional for `custom`. When supplied (via `SYNAPSE_LLM_API_KEY`, `--llm
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `provider` | `"anthropic" \| "openai" \| "groq" \| "grok" \| "openrouter" \| "ollama" \| "custom"` | **yes** | — |
+| `provider` | `"anthropic" \| "openai" \| "groq" \| "grok" \| "openrouter" \| "ollama" \| "custom" \| "bedrock" \| "vertex"` | **yes** | — |
 | `base_url` | string (valid URL) | only for `custom` | Overrides the provider default. Endpoint **root** — `/chat/completions` is appended. |
 | `models.triage` | string | no | High-volume candidate classification. Cheap model. |
 | `models.generate` | string | no | Code generation. Strongest model. |
@@ -278,6 +297,9 @@ A key is optional for `custom`. When supplied (via `SYNAPSE_LLM_API_KEY`, `--llm
 | `tool_choice` | boolean | no | `false` = endpoint ignores `tool_choice`; use JSON mode. |
 | `max_tokens_field` | `"max_tokens" \| "max_completion_tokens"` | no | Output-cap field name. |
 | `temperature` | boolean | no | `false` = omit `temperature`. |
+| `region` | string | no | `bedrock`: AWS region. `vertex`: Vertex location. |
+| `project` | string | no | `vertex`: GCP project id. |
+| `aws_profile` | string | no | `bedrock`: named AWS profile. |
 | `api_key_prefix` | string | no | First 5 chars, for display only. Written by `--save-key`. |
 | `api_key_encrypted` | string | no | Fernet ciphertext, machine-bound. Written by `--save-key`. |
 
@@ -345,11 +367,11 @@ Use `--global` to apply any of this to `~/.synapse` instead of the current proje
 
 ## Features
 
-- **Bring your own model** — local builds run on Anthropic, OpenAI, Groq, xAI (Grok), OpenRouter, Ollama, or any OpenAI-compatible endpoint you host. Switch with one command; no quota, no code upload.
+- **Bring your own model** — local builds run on Anthropic, OpenAI, Groq, xAI (Grok), OpenRouter, Ollama, Amazon Bedrock, Google Vertex AI, or any OpenAI-compatible endpoint you host. Switch with one command; no quota, and nothing goes to Synapse except anonymous telemetry.
 - **Zero boilerplate** — tool schemas, argument validation, and MCP wire format handled for you.
-- **Client-side exploration** — grep, AST symbol lookup, and definition/usage tracing all run on your machine.
-- **First-class Python + TypeScript** — full symbol and navigation support. Go, Java, C#, Rust get grep-based fallback.
-- **Streaming gRPC** — bidirectional session with the agent so you can watch tool calls land in real time.
+- **Client-side extraction** — language detection and route/function extraction run on your machine with tree-sitter.
+- **Reads 6 languages** — Auto mode reads Python, TypeScript, Java, C#, Go and Rust. Custom mode reads Python. Generated server files are Python. See [Build modes](#build-modes-auto-and-custom).
+- **Streaming gRPC** — live progress from the backend while your server is generated.
 - **Deterministic surface extraction** — tree-sitter parsers with a 64KB head-sniff make repeat runs cache-friendly.
 - **Signed API keys** — Ed25519 envelope keys, per-request quota, revocation in under 30 seconds.
 
@@ -358,8 +380,9 @@ Use `--global` to apply any of this to `~/.synapse` instead of the current proje
 | Command | Purpose |
 |---|---|
 | `synapse init [--force]` | Initialize Synapse in the current project. Prompts for API key. |
-| `synapse analyze [-o <dir>] [-v]` | Scan the codebase and build a symbol/schema map. |
-| `synapse build [-q <query>] [-o <file>] [--no-validate] [--no-docs] [-g]` | Generate an MCP server. Without `-q`, discovers candidate use cases. |
+| `synapse build [--auto \| --custom] [-q <query>] [--smart-names] [--local] [--resume]` | Generate an MCP server with the v2 engine. Without `--auto`/`--custom`, asks which mode. `-q` describes the Custom-mode tool. |
+| `synapse build --engine v1 [-q <query>] [-o <file>] [--no-validate] [--no-docs] [-g]` | Legacy v1 engine (hosted, Python only). Needs `synapse analyze` first. |
+| `synapse analyze [-o <dir>] [-v]` | Scan Python code and write the symbol/schema map the v1 engine uses. |
 | `synapse config [--update] [--key <k>] [--global]` | View or update config. |
 | `synapse model` | Show the inference provider local builds use. |
 | `synapse model list` | List supported providers and their default models. |
@@ -396,29 +419,45 @@ The inference provider used by `--local` builds is configured separately — see
 
 ## How `build` works
 
-`synapse build` opens a bidirectional gRPC stream with the backend agent. The agent never sees your code — it *asks the CLI* for exactly what it needs:
+With the default v2 engine:
 
-- `read_file`, `find_files`, `grep` — bounded reads over your working directory
-- `list_symbols`, `find_definition`, `find_usages` — AST navigation via tree-sitter
-- `write_file`, `replace_file`, `insert_file` — final artifact writes
+1. **Scan (local).** The CLI detects the project language and extracts HTTP routes (and, in Custom mode, public functions) with tree-sitter. This runs on your machine; the scan can be paused and continued with `--resume`.
+2. **Pick.** You choose Auto or Custom, then the endpoints or functions to expose.
+3. **Generate.** Auto mode saves the endpoint config to your Synapse account (hosted) or writes a passthrough server (`--local`). Custom mode sends the extracted manifest and your description to the backend (hosted) or to your model (`--local`), which composes the tool; it is checked and written to your project as a Python file.
 
-Every tool call is scoped to `process.cwd()`. Only the specific bytes the agent asks for flow back over the wire.
+The legacy v1 engine (`--engine v1`) works differently: a hosted agent explores the code by asking the CLI to run `read_file`, `grep`, `list_symbols` and similar tools, so the contents of the files it asks for are sent to the backend.
+
+## What leaves your machine
+
+| Build | Sent to | What is sent |
+|---|---|---|
+| Hosted Auto | Synapse API | For each endpoint you select: name, description (from the docstring), HTTP method, route path, header names with `${ENV}` placeholders, and an example payload. Saved to your account as the MCP server config. |
+| Hosted Auto + `--smart-names` | Synapse backend | The above, plus the **source code** of each selected handler (up to 3,000 characters each) and up to 6,000 characters of your README / `docs/` files. |
+| Hosted Custom | Synapse backend | The extracted manifest: module and function names, signatures, docstrings (trimmed), file paths and line numbers, and route metadata, plus your workflow description. Function bodies are not sent by the CLI. |
+| Hosted v1 (`--engine v1`) | Synapse backend | The project schema from `synapse analyze`, plus the contents of the files, search results and symbols the agent asks for. |
+| `--local` | Your chosen model provider | Custom mode and `--smart-names` send the same kind of content as the hosted rows above. Auto mode without `--smart-names` calls no model. Nothing goes to Synapse except telemetry. |
+| Telemetry (all modes) | Synapse API | Event name, mode, counts, model name, token counts and timings, plus SHA-256 hashes of your working directory path, your machine/user and (for `--local` model calls) each prompt. Hosted events are tied to your API key. No code, no prompts. Turn off with `SYNAPSE_TELEMETRY=0`. |
+
+Hosted smart naming and Custom mode do read your code. We don't log or host your code. For hosted Auto builds, your account stores the endpoint config listed above so the runner can serve your tools.
 
 ## Language support
 
-| Language | Symbol extraction | Discovery | Generation |
-|---|---|---|---|
-| Python | ✅ | ✅ | ✅ |
-| TypeScript / JavaScript / TSX / JSX | ✅ | ✅ | ✅ |
-| Go, Java, C#, Rust | grep + patterns | partial | best-effort |
+| Language | Detected and scanned | Auto mode | Custom mode | Generated file |
+|---|---|---|---|---|
+| Python | ✅ | ✅ | ✅ | Python |
+| TypeScript (`.ts`, `.tsx`) | ✅ | ✅ hosted; `--local` names tools only | — | — |
+| Java, C#, Go, Rust | ✅ | ✅ hosted; `--local` names tools only | — | — |
+| JavaScript (`.js`, `.jsx`) | — | — | — | — |
+
+Hosted Auto mode writes no file for any language: the hosted runner serves the tools.
 
 ## Troubleshooting
 
 | Message | Fix |
 |---|---|
 | `Not Initialized` on `build` | Run `synapse init` |
-| `Analysis Required` | Run `synapse analyze` |
-| `Quota Exceeded` | Check `synapse info` |
+| `Analysis Required` (with `--engine v1`) | Run `synapse analyze` |
+| `Quota Exceeded` | Check `synapse info`. The free tier allows 10 MCP servers and 100,000 indexed lines. |
 | Backend error mid-build | The CLI retries transient errors. Quote the `Session:` id when opening an issue. |
 
 ## Documentation
@@ -431,7 +470,7 @@ Every tool call is scoped to `process.cwd()`. Only the specific bytes the agent 
 
 ```bash
 git clone https://github.com/2ndbrainlabs-ai/synapse-cli-ts.git
-cd synapse-cli
+cd synapse-cli-ts
 npm install
 npm run dev -- <command>        # run against source
 npm run build                   # produce dist/
