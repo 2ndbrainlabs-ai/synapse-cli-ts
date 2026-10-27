@@ -1,6 +1,7 @@
 import { sha256 } from "../utils/hash.js";
 import { getApiUrl } from "../config/manager.js";
 import { installationId } from "../backend/trace-forwarder.js";
+import { readCliVersion, UNKNOWN_CLI_VERSION } from "../utils/version.js";
 
 function telemetryDisabled(): boolean {
   const v = process.env.SYNAPSE_TELEMETRY;
@@ -45,6 +46,8 @@ export async function trackEvent(
     if (toolCount) payload.tool_count = toolCount;
     if (candidateCount) payload.candidate_count = candidateCount;
     if (durationMs) payload.duration_ms = durationMs;
+    const cliVersion = readCliVersion();
+    if (cliVersion !== UNKNOWN_CLI_VERSION) payload.cli_version = cliVersion;
 
     const body = JSON.stringify(payload);
 
