@@ -73,6 +73,20 @@ describe("FunctionVerdictSchema", () => {
     expect(r.success).toBe(true);
   });
 
+  it("fills defaults for omitted optional fields", () => {
+    const r = FunctionVerdictSchema.parse({ qualname: "get_user", band: "HIGH" });
+    expect(r.tool_shape).toBe("");
+    expect(r.workflow_hints).toEqual([]);
+    expect(r.one_line_purpose).toBe("");
+  });
+
+  it("returns a fresh default array per parse", () => {
+    const a = FunctionVerdictSchema.parse({ qualname: "a", band: "LOW" });
+    const b = FunctionVerdictSchema.parse({ qualname: "b", band: "LOW" });
+    a.workflow_hints.push("mutated");
+    expect(b.workflow_hints).toEqual([]);
+  });
+
   it("rejects an invalid band", () => {
     const r = FunctionVerdictSchema.safeParse({
       qualname: "get_user",
@@ -100,6 +114,15 @@ describe("WorkflowProposalSchema", () => {
       confidence: 0.9,
     });
     expect(r.success).toBe(false);
+  });
+
+  it("defaults confidence to 0 when omitted", () => {
+    const r = WorkflowProposalSchema.parse({
+      name: "flow",
+      purpose: "x",
+      functions: ["a.b", "c.d"],
+    });
+    expect(r.confidence).toBe(0);
   });
 
   it("clamps confidence to [0,1]", () => {
