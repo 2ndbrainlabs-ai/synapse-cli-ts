@@ -33,6 +33,12 @@ function nonInteractive(): boolean {
   return process.env.SYNAPSE_NON_INTERACTIVE === "1";
 }
 
+/** True when a prompt can actually be answered: not --yes / CI, and both
+ *  stdin and stdout are terminals. */
+export function canPrompt(): boolean {
+  return !nonInteractive() && Boolean(process.stdin.isTTY) && Boolean(process.stdout.isTTY);
+}
+
 // ---------------------------------------------------------------------------
 // Ember prompt theme
 //

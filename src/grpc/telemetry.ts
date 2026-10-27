@@ -17,6 +17,20 @@ export interface QuotaInfo {
   quotaMessage: string;
 }
 
+/**
+ * Outcome fields for a `build` event (SYN-314). Older ui-backends ignore
+ * fields they don't know (pydantic's default extra="ignore"), so sending them
+ * never breaks ingestion.
+ */
+export interface EventOutcome {
+  /** false for a failed or aborted build. */
+  success?: boolean;
+  /** Why the build failed or was aborted — set only when success is false. */
+  errorCode?: string;
+  /** Detected project language, e.g. "python". */
+  language?: string;
+}
+
 export async function trackEvent(
   eventType: string,
   apiKey: string,
@@ -26,6 +40,7 @@ export async function trackEvent(
   candidateCount = 0,
   durationMs = 0,
   mode: "hosted" | "local" = "hosted",
+  outcome: EventOutcome = {},
 ): Promise<void> {
   try {
     if (telemetryDisabled()) return;
@@ -45,7 +60,10 @@ export async function trackEvent(
     if (linesCount) payload.lines_count = linesCount;
     if (toolCount) payload.tool_count = toolCount;
     if (candidateCount) payload.candidate_count = candidateCount;
-    if (durationMs) payload.duration_ms = durationMs;
+    if (durationMs) payload.duration_ms = Math.round(durationMs);
+    if (outcome.success !== undefined) payload.success = outcome.success;
+    if (outcome.errorCode && outcome.success === false) payload.error_code = outcome.errorCode;
+    if (outcome.language) payload.language = outcome.language;
     const cliVersion = readCliVersion();
     if (cliVersion !== UNKNOWN_CLI_VERSION) payload.cli_version = cliVersion;
 
@@ -67,6 +85,33 @@ export async function trackEvent(
     }).finally(() => clearTimeout(timeout));
   } catch {
     // Telemetry is fire-and-forget
+  }
+}
+
+// ---------------------------------------------------------------------------
+// API key check — used by `synapse init` (SYN-314). Not telemetry, so it runs
+// even with SYNAPSE_TELEMETRY=0. Anything other than a clear accept/reject
+// (offline, timeout, 5xx) is "unknown" and must never block the caller. The
+// timeout allows for a Cloud Run cold start on the API.
+// ---------------------------------------------------------------------------
+
+export type ApiKeyCheck = "valid" | "rejected" | "unknown";
+
+export async function verifyApiKey(apiKey: string, timeoutMs = 10_000): Promise<ApiKeyCheck> {
+  if (!apiKey) return "rejected";
+  try {
+    const apiUrl = getApiUrl().replace(/\/+$/, "");
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const resp = await fetch(`${apiUrl}/quota`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: controller.signal,
+    }).finally(() => clearTimeout(timeout));
+    if (resp.ok) return "valid";
+    if (resp.status === 401 || resp.status === 403) return "rejected";
+    return "unknown";
+  } catch {
+    return "unknown";
   }
 }
 

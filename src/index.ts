@@ -122,6 +122,15 @@ program
   .option("--base-url <url>", "v2 auto: deployed base URL for the API")
   .option("--server-name <name>", "v2 auto: name for the created MCP server")
   .option(
+    "--all-endpoints",
+    "v2 auto: expose every detected endpoint without the picker (implies --auto; for CI / no TTY)",
+  )
+  .option(
+    "--endpoints <list>",
+    'v2 auto: comma-separated endpoints to expose without the picker — "GET /path", "/path" ' +
+      "or tool names (implies --auto; for CI / no TTY)",
+  )
+  .option(
     "--smart-names",
     "v2 auto: read handler source (+ README/docs) to name/describe tools from real " +
       "behavior instead of route + docstring alone. Local runs it on your configured " +
@@ -159,6 +168,8 @@ program
         query: opts.query,
         baseUrl: opts.baseUrl,
         serverName: opts.serverName,
+        allEndpoints: opts.allEndpoints ?? false,
+        endpoints: opts.endpoints,
         smartNames: opts.smartNames ?? false,
         resume: opts.resume ?? false,
         maxTimeMinutes: Number.isFinite(maxTimeMinutes) ? (maxTimeMinutes as number) : undefined,

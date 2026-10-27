@@ -158,15 +158,26 @@ export function setGlobalApiKey(rawKey: string): void {
   saveGlobalConfig(config);
 }
 
+/** Where the API key in use came from, in resolution order. */
+export type ApiKeySource = "env" | "project" | "global";
+
 export function resolveApiKey(workingDir?: string): string | null {
+  return resolveApiKeyWithSource(workingDir)?.key ?? null;
+}
+
+/** Same resolution as resolveApiKey, plus which source won — so messages can
+ *  name the key actually in use (SYNAPSE_API_KEY overrides saved keys). */
+export function resolveApiKeyWithSource(
+  workingDir?: string,
+): { key: string; source: ApiKeySource } | null {
   const envKey = (process.env.SYNAPSE_API_KEY ?? "").trim();
-  if (envKey) return envKey;
+  if (envKey) return { key: envKey, source: "env" };
 
   if (workingDir) {
     const [, encrypted] = getProjectApiKeyEncrypted(workingDir);
     if (encrypted) {
       try {
-        return decryptApiKey(encrypted);
+        return { key: decryptApiKey(encrypted), source: "project" };
       } catch {
         // Fall through to global
       }
@@ -176,7 +187,7 @@ export function resolveApiKey(workingDir?: string): string | null {
   const [, encrypted] = getGlobalApiKeyEncrypted();
   if (encrypted) {
     try {
-      return decryptApiKey(encrypted);
+      return { key: decryptApiKey(encrypted), source: "global" };
     } catch {
       // Give up
     }

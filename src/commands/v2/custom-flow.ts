@@ -18,7 +18,9 @@ import {
   computeCallSiteCounts,
 } from "../../extractors/languages/python-streamed.js";
 import { serializeManifestForWire } from "../../extractors/core/manifest-wire.js";
-import { renderErrorBox, ERROR_CODES, parseWireError } from "../../ui/errors.js";
+import { renderErrorBox, ERROR_CODES, classifyFailure, type ClassifyOpts, type WireError } from "../../ui/errors.js";
+import { BuildFailure, OUTCOME_CODES, type BuildReport } from "./build-outcome.js";
+import { resolveApiKeyWithSource } from "../../config/manager.js";
 
 import type { SessionManager } from "../../session/session-manager.js";
 import type { ResolvedLlm } from "../../config/llm-config.js";
@@ -40,6 +42,35 @@ export interface CustomFlowOptions {
   effectiveMode?: "hosted" | "local";
   /** Resolved LLM provider for local mode. Ignored when effectiveMode === "hosted". */
   llm?: ResolvedLlm | null;
+  /** Outcome counters read by build telemetry. */
+  report?: BuildReport;
+}
+
+/** Classifier failures that would fail the compose too — stop the build
+ *  instead of falling back to the manual picker. */
+const FATAL_CLASSIFY_CODES = new Set<string>([
+  ERROR_CODES.AUTH_INVALID,
+  ERROR_CODES.MISSING_API_KEY,
+  ERROR_CODES.QUOTA_EXCEEDED,
+]);
+
+function failureOpts(args: { effectiveMode?: "hosted" | "local"; workingDir: string }): ClassifyOpts {
+  if (args.effectiveMode === "local") return { mode: "local" };
+  return { mode: "hosted", keySource: resolveApiKeyWithSource(args.workingDir)?.source };
+}
+
+function stopIfFatal(
+  wire: WireError,
+  args: { sessionId?: string; workingDir: string },
+): void {
+  if (!FATAL_CLASSIFY_CODES.has(wire.error_code)) return;
+  renderErrorBox({
+    title: "Classifier Error",
+    wire,
+    sessionId: args.sessionId,
+    workingDir: args.workingDir,
+  });
+  throw new BuildFailure(wire.error_code, wire.user_message);
 }
 
 /** Pick between "describe an intent" or "pick functions" — then collect the answer. */
@@ -75,7 +106,10 @@ async function collectIntent(functions: SurfaceFunction[]): Promise<{
     });
     selected = picked;
     if (selected.length === 0) {
-      throw new Error("no functions selected and no workflow described");
+      roundedBox("Nothing to Compose", "✖", t.err, [
+        "No functions were selected and no workflow was described.",
+      ]);
+      throw new BuildFailure(OUTCOME_CODES.NO_FUNCTIONS_SELECTED);
     }
   }
 
@@ -195,47 +229,42 @@ async function tryDiscoverWorkflows(args: {
       },
     });
   } catch (e) {
-    spinner2.fail("Classification failed", String(e));
+    const wire = classifyFailure(String(e), failureOpts(args));
+    spinner2.fail("Classification failed", wire.user_message);
     args.session?.recordError({
-      code: ERROR_CODES.NETWORK_TIMEOUT,
+      code: wire.error_code,
       stage: "classify",
-      message: "Couldn't reach the classifier backend.",
-      technical: String(e),
+      message: wire.user_message,
+      hint: wire.hint,
+      technical: wire.technical || String(e),
     });
+    stopIfFatal(wire, args);
     renderErrorBox({
       title: "Classifier Error",
+      wire: { ...wire, hint: "Continuing with the manual function picker." },
       sessionId: args.sessionId,
       workingDir: args.workingDir,
-      fallback: {
-        code: ERROR_CODES.NETWORK_TIMEOUT,
-        message: "Couldn't reach the classifier backend.",
-        hint: "Continuing with the manual function picker. Check `synapse config` if this persists.",
-      },
     });
     return null;
   }
 
   if (!classify.success && classify.verdicts.length === 0) {
-    const wire = parseWireError(classify.error);
-    spinner2.fail("Classification failed", wire?.user_message ?? classify.error ?? "unknown error");
+    const wire = classifyFailure(classify.error || "no verdicts returned", failureOpts(args));
+    spinner2.fail("Classification failed", wire.user_message);
     args.session?.recordError({
-      code: wire?.error_code ?? ERROR_CODES.INTERNAL_ERROR,
+      code: wire.error_code,
       stage: "classify",
-      message: wire?.user_message ?? classify.error ?? "no verdicts returned",
-      hint: wire?.hint,
-      technical: wire?.technical,
-      missing_fields: wire?.missing_fields,
+      message: wire.user_message,
+      hint: wire.hint,
+      technical: wire.technical,
+      missing_fields: wire.missing_fields,
     });
+    stopIfFatal(wire, args);
     renderErrorBox({
       title: "Classifier Error",
-      wire,
+      wire: { ...wire, hint: "Continuing with the manual function picker." },
       sessionId: args.sessionId,
       workingDir: args.workingDir,
-      fallback: {
-        code: ERROR_CODES.INTERNAL_ERROR,
-        message: classify.error || "no verdicts returned",
-        hint: "Continuing with the manual function picker.",
-      },
     });
     return null;
   }
@@ -391,6 +420,7 @@ function stripModulePrefix(fullyQualified: string): string {
 
 export async function runCustomFlow(opts: CustomFlowOptions): Promise<void> {
   const functions = opts.manifest.functions;
+  if (opts.report) opts.report.candidateCount = functions.length;
 
   if (functions.length === 0 && !opts.intent) {
     roundedBox("No Composable Functions", "⚠", t.warn, [
@@ -399,7 +429,7 @@ export async function runCustomFlow(opts: CustomFlowOptions): Promise<void> {
       "Try:",
       "  " + t.cmd("synapse build --auto") + " — expose your HTTP endpoints",
     ]);
-    return;
+    throw new BuildFailure(OUTCOME_CODES.NO_FUNCTIONS);
   }
 
   let intent = opts.intent ?? "";
@@ -489,7 +519,7 @@ export async function runCustomFlow(opts: CustomFlowOptions): Promise<void> {
     llm: opts.llm ?? undefined,
   });
 
-  let result;
+  let result: Awaited<ReturnType<typeof client.buildCustom>> | undefined;
   try {
     result = await client.buildCustom({
       language: opts.manifest.language,
@@ -501,31 +531,36 @@ export async function runCustomFlow(opts: CustomFlowOptions): Promise<void> {
       onStatus,
     });
   } finally {
-    if (state.genUI) { state.genUI.complete(); state.genUI = null; }
+    // Only claim success once we know a file came back.
+    const produced = Boolean(result?.file_source);
+    if (state.genUI) {
+      if (produced) state.genUI.complete();
+      else state.genUI.fail();
+      state.genUI = null;
+    }
     if (state.spinner) { state.spinner.stop(); state.spinner = null; }
   }
 
-  if (result.error && !result.file_source) {
-    const wire = parseWireError(result.error);
+  if (!result.file_source) {
+    const wire = classifyFailure(
+      result.error || "the backend didn't return a rendered file",
+      failureOpts(opts),
+    );
     opts.session?.recordError({
-      code: wire?.error_code ?? ERROR_CODES.LLM_OUTPUT_INVALID,
+      code: wire.error_code,
       stage: "shape",
-      message: wire?.user_message ?? result.error,
-      hint: wire?.hint,
-      technical: wire?.technical,
-      missing_fields: wire?.missing_fields,
+      message: wire.user_message,
+      hint: wire.hint,
+      technical: wire.technical,
+      missing_fields: wire.missing_fields,
     });
     renderErrorBox({
       title: "Composition Failed",
       wire,
       sessionId: opts.sessionId,
       workingDir: opts.workingDir,
-      fallback: {
-        code: ERROR_CODES.LLM_OUTPUT_INVALID,
-        message: result.error || "the backend didn't return a rendered file",
-      },
     });
-    return;
+    throw new BuildFailure(wire.error_code, wire.user_message);
   }
 
   const written = writeWithSuffix(
@@ -535,6 +570,7 @@ export async function runCustomFlow(opts: CustomFlowOptions): Promise<void> {
     result.file_source,
   );
   mergeEnvExample(opts.workingDir, result.env_vars);
+  if (opts.report) opts.report.toolCount = 1;
 
   if (!result.success) {
     stepWarn("Verify checks did not pass", "file written anyway — review before running");

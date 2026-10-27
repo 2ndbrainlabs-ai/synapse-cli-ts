@@ -5,10 +5,14 @@
 // then dispatches to Auto or Custom track based on the mode picker or flags.
 //
 // Session manager owns the AbortController so:
-//   - Ctrl-C appends `session_paused{reason:'sigint'}` and exits 0
-//   - `--max-time` fires at the deadline, appends `session_paused{reason:'time_cap'}`, exits 0
+//   - Ctrl-C appends `session_paused{reason:'sigint'}`
+//   - `--max-time` fires at the deadline, appends `session_paused{reason:'time_cap'}`
 //   - `--resume` picks the most recent unfinished ledger for this repo and
 //     replays its SHA cache, so we re-parse only files whose bytes changed
+//
+// Exit status (SYN-314): every failed, aborted or paused build exits non-zero.
+// Flows throw BuildFailure after showing the error; runBuildV2 sets
+// process.exitCode and sends one `build` telemetry event with the outcome.
 //
 // Keeps v1 (`runBuild` in ../build.ts) untouched for backwards compat.
 
@@ -33,6 +37,9 @@ import {
   readLedger,
 } from "../../session/ledger.js";
 import { computeRepoHash, newSessionId } from "../../session/session-id.js";
+import { readCliVersion } from "../../utils/version.js";
+import { hasSelectionFlags } from "./endpoint-picker.js";
+import { BuildFailure, OUTCOME_CODES, type BuildReport } from "./build-outcome.js";
 
 export interface BuildV2Options {
   auto?: boolean;
@@ -63,6 +70,10 @@ export interface BuildV2Options {
   llmProject?: string | null;
   /** Back-compat alias for --api-key when the provider is Anthropic. */
   anthropicKey?: string | null;
+  /** Auto: expose every detected endpoint without the picker. */
+  allEndpoints?: boolean;
+  /** Auto: comma-separated endpoints to expose ("GET /x", "/x" or tool names). */
+  endpoints?: string;
 }
 
 function parseMaxTimeMs(opts: BuildV2Options): number {
@@ -70,23 +81,73 @@ function parseMaxTimeMs(opts: BuildV2Options): number {
   return Math.max(30_000, Math.round(minutes * 60_000));
 }
 
-function cliVersion(): string {
-  try {
-    // Best effort — the version is baked in at build time or resolved via
-    // package.json when running with tsx.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    return (globalThis as any).__SYNAPSE_CLI_VERSION__ ?? process.env.npm_package_version ?? "dev";
-  } catch {
-    return "dev";
-  }
+/** What runBuildV2 needs to report the outcome, filled in as the build runs. */
+interface BuildContext {
+  apiKey: string;
+  effectiveMode: "hosted" | "local";
+  language?: string;
+  report: BuildReport;
+}
+
+function isUserAbort(err: unknown): boolean {
+  const e = err as { name?: string; code?: string } | null;
+  return e?.name === "ExitPromptError" || e?.code === "ABORT_ERR";
 }
 
 export async function runBuildV2(opts: BuildV2Options): Promise<void> {
+  const startedAt = Date.now();
+  const ctx: BuildContext = {
+    apiKey: "",
+    effectiveMode: "hosted",
+    report: { toolCount: 0, candidateCount: 0 },
+  };
+
+  let errorCode: string | undefined;
+  let rethrow: unknown;
+  try {
+    await buildV2(opts, ctx);
+  } catch (err) {
+    if (err instanceof BuildFailure) {
+      errorCode = err.code;
+    } else {
+      // Prompt cancellation and real crashes are handled by the top-level
+      // handlers in index.ts — record the outcome, then let them through.
+      errorCode = isUserAbort(err) ? OUTCOME_CODES.CANCELLED : OUTCOME_CODES.UNEXPECTED;
+      rethrow = err;
+    }
+  }
+
+  if (errorCode) process.exitCode = 1;
+  sendBuildTelemetry(ctx, Date.now() - startedAt, errorCode);
+  if (rethrow) throw rethrow;
+}
+
+/** Fire-and-forget — telemetry is never allowed to break or delay the build. */
+function sendBuildTelemetry(ctx: BuildContext, durationMs: number, errorCode?: string): void {
+  void import("../../grpc/telemetry.js")
+    .then(({ trackEvent }) =>
+      trackEvent(
+        "build",
+        ctx.apiKey,
+        process.cwd(),
+        /* linesCount */ 0,
+        ctx.report.toolCount,
+        ctx.report.candidateCount,
+        durationMs,
+        ctx.effectiveMode,
+        { success: !errorCode, errorCode, language: ctx.language },
+      ),
+    )
+    .catch(() => {});
+}
+
+async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
   const workingDir = process.cwd();
 
   // --local is a one-shot override for this invocation only — no project
   // config can pin mode to local (see resolveEffectiveMode).
   const effectiveMode = resolveEffectiveMode(opts.local ?? false);
+  ctx.effectiveMode = effectiveMode;
 
   // Local one-shot builds don't require prior `synapse init`.
   if (!isInitialized(workingDir) && effectiveMode !== "local") {
@@ -95,7 +156,7 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
       "",
       `Run ${t.cmd("synapse init")} first, or pass ${t.cmd("--local")} to build with your own model.`,
     ]);
-    return;
+    throw new BuildFailure(OUTCOME_CODES.NOT_INITIALIZED);
   }
 
   // Resolve the credentials we'll actually use downstream.
@@ -121,7 +182,7 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
         "",
         `Inspect or change it with ${t.cmd("synapse model")}.`,
       ]);
-      return;
+      throw new BuildFailure(OUTCOME_CODES.LLM_NOT_READY);
     }
 
     stepInfo(
@@ -138,9 +199,10 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
         "",
         `Or run this build in local mode: ${t.cmd("synapse build --local")}`,
       ]);
-      return;
+      throw new BuildFailure(OUTCOME_CODES.MISSING_API_KEY);
     }
     apiKey = resolved;
+    ctx.apiKey = apiKey;
   }
 
   sectionHeader("Build MCP Server (v2)", "🏗️");
@@ -159,7 +221,7 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
       roundedBox("Nothing to Resume", "✖", t.err, [
         "No unfinished discover session found for this repo.",
       ]);
-      return;
+      throw new BuildFailure(OUTCOME_CODES.NOTHING_TO_RESUME);
     }
     const latest = resumable[0];
     sessionId = latest.sessionId;
@@ -187,12 +249,16 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
   // endpoints and generates a passthrough server file (no LLM call, nothing
   // leaves the machine) instead of pushing config to the hosted backend.
   // ---------------------------------------------------------------------------
+  // --all-endpoints / --endpoints only make sense for Auto, so they imply it.
+  const selection = { allEndpoints: opts.allEndpoints, endpoints: opts.endpoints };
+  const autoFlag = opts.auto || (!opts.custom && hasSelectionFlags(selection));
+
   let mode: BuildMode;
   try {
-    mode = await pickBuildMode({ autoFlag: opts.auto, customFlag: opts.custom });
+    mode = await pickBuildMode({ autoFlag, customFlag: opts.custom });
   } catch {
     stepWarn("Cancelled", "no mode selected");
-    return;
+    throw new BuildFailure(OUTCOME_CODES.CANCELLED);
   }
   if (effectiveMode === "local") {
     stepInfo("Mode", `local — ${mode} flow`);
@@ -206,7 +272,7 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
     sessionId,
     mode,
     repoHash,
-    cliVersion: cliVersion(),
+    cliVersion: readCliVersion(),
     maxTimeMs,
     resumeFrom: resumeState,
   });
@@ -236,7 +302,7 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
       hint: "Check that the repo has valid Python source. If this repeats, share the ledger via `synapse logs`.",
     });
     session.dispose();
-    return;
+    throw new BuildFailure(OUTCOME_CODES.EXTRACTOR_FAILED);
   }
 
   if (session.aborted) {
@@ -252,13 +318,14 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
       `Resume with: ${t.cmd("synapse build --resume")}`,
     ]);
     session.dispose();
-    return;
+    throw new BuildFailure(OUTCOME_CODES.SESSION_PAUSED);
   }
 
   spinner.complete(
     `Extracted ${manifest.endpoints.length} endpoint(s) and ${manifest.functions.length} function(s)`,
   );
   stepOk("Session", sessionId);
+  ctx.language = manifest.language;
 
   stepInfo(
     "Language",
@@ -278,6 +345,8 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
         sessionId,
         llm,
         smartNames: opts.smartNames,
+        selection,
+        report: ctx.report,
       });
     } else if (mode === "auto") {
       await runAutoFlow({
@@ -287,6 +356,8 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
         baseUrl: opts.baseUrl,
         sessionId,
         smartNames: opts.smartNames,
+        selection,
+        report: ctx.report,
       });
     } else {
       await runCustomFlow({
@@ -299,30 +370,10 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
         session,
         effectiveMode,
         llm,
+        report: ctx.report,
       });
     }
   } finally {
     session.dispose();
   }
-
-  // Fire-and-forget telemetry — records the v2 build event that was previously
-  // never sent (only the legacy v1 build.ts emitted trackEvent).
-  try {
-    const { trackEvent } = await import("../../grpc/telemetry.js");
-    const endpointCount = manifest.endpoints.length;
-    const functionCount = manifest.functions.length;
-    trackEvent(
-      "build",
-      apiKey,
-      workingDir,
-      /* linesCount */ 0,
-      /* toolCount */ endpointCount + functionCount,
-      /* candidateCount */ functionCount,
-      /* durationMs */ Date.now() - Date.now(), // session tracks wall-clock separately
-      effectiveMode,
-    ).catch(() => {});
-  } catch {
-    // Telemetry is never allowed to break the build
-  }
-  void apiKey;
 }
