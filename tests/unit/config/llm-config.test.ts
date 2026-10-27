@@ -21,8 +21,14 @@ vi.mock("../../../src/config/paths.js", async (importOriginal) => {
   };
 });
 
-const { resolveLlm, LlmSettingsSchema, writeLlmSettings, readGlobalLlmSettings } =
-  await import("../../../src/config/llm-config.js");
+const {
+  resolveLlm,
+  LlmSettingsSchema,
+  writeLlmSettings,
+  readGlobalLlmSettings,
+  ALLOWED_PROTOCOLS,
+  isAllowedBaseUrl,
+} = await import("../../../src/config/llm-config.js");
 
 const PROVIDER_ENV = [
   "ANTHROPIC_API_KEY",
@@ -281,8 +287,28 @@ describe("resolveLlm — bad input", () => {
     "http://127.0.0.1:8000/v1",
     "http://gpu.internal:8000/v1",
     "https://api.groq.com/openai/v1",
+    "HTTPS://API.GROQ.COM/openai/v1",
+    "ftp://files.internal/models",
   ])("accepts base_url %s", (base_url) => {
     expect(LlmSettingsSchema.safeParse({ provider: "custom", base_url }).success).toBe(true);
+    expect(isAllowedBaseUrl(base_url)).toBe(true);
+  });
+
+  it.each([
+    "javascript:alert(1)",
+    "file:///etc/passwd",
+    "ws://gpu.internal:8000/v1",
+    "localhost:11434",
+    "not-a-url",
+  ])("rejects base_url %s", (base_url) => {
+    expect(LlmSettingsSchema.safeParse({ provider: "custom", base_url }).success).toBe(false);
+    expect(isAllowedBaseUrl(base_url)).toBe(false);
+  });
+
+  it("lists the allowed protocols when base_url uses another one", () => {
+    const w = invalidWarning({ provider: "groq", base_url: "file:///etc/passwd" });
+    expect(w).toMatch(/base_url: Invalid URL/i);
+    for (const p of ALLOWED_PROTOCOLS) expect(w).toContain(p);
   });
 
   it("keeps OpenRouter's attribution headers", () => {

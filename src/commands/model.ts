@@ -24,9 +24,11 @@ import {
 } from "../providers/catalog.js";
 import type { ProviderId, Task } from "../providers/types.js";
 import {
+  ALLOWED_PROTOCOLS,
   TASKS,
   clearLlmSettings,
   encryptApiKey,
+  isAllowedBaseUrl,
   llmKeyDisplay,
   readGlobalLlmSettings,
   readProjectLlmSettings,
@@ -225,12 +227,11 @@ export function runModelSet(providerArg: string, opts: ModelOptions): void {
   // --- endpoint ---
   const baseUrl = (opts.baseUrl ?? "").trim();
   if (baseUrl) {
-    try {
-      // Surface a bad URL here rather than as a fetch failure mid-build.
-      new URL(baseUrl);
-    } catch {
+    // Surface a bad URL here rather than as a fetch failure mid-build.
+    if (!isAllowedBaseUrl(baseUrl)) {
       roundedBox("Invalid --base-url", "✖", t.err, [
         `"${baseUrl}" is not a valid URL.`,
+        `Allowed protocols: ${ALLOWED_PROTOCOLS.join(", ")}`,
         "",
         `Example: ${t.cmd("http://localhost:8000/v1")}`,
       ]);

@@ -49,12 +49,34 @@ export const TASKS = [
   "fallback_generate",
 ] as const;
 
+/**
+ * URL schemes accepted for `base_url`. Edit this list to allow or block a
+ * protocol; the config schema and `synapse model set --base-url` both read it.
+ * Lower-case, without the trailing colon.
+ */
+export const ALLOWED_PROTOCOLS = ["http", "https", "ftp"] as const;
+
+const ALLOWED_PROTOCOL_PATTERN = new RegExp(`^(${ALLOWED_PROTOCOLS.join("|")})$`, "i");
+
+export const INVALID_BASE_URL_MESSAGE = `Invalid URL (allowed protocols: ${ALLOWED_PROTOCOLS.join(", ")})`;
+
+/** True when `url` parses and its scheme is in {@link ALLOWED_PROTOCOLS}. */
+export function isAllowedBaseUrl(url: string): boolean {
+  try {
+    return ALLOWED_PROTOCOL_PATTERN.test(new URL(url).protocol.replace(/:$/, ""));
+  } catch {
+    return false;
+  }
+}
+
 export const LlmSettingsSchema = z
   .object({
     /** Which provider family drives local codegen. */
     provider: z.enum(PROVIDER_IDS as [ProviderId, ...ProviderId[]]),
     /** Endpoint root. Required for `custom`; overrides the default otherwise. */
-    base_url: z.url().optional(),
+    base_url: z
+      .url({ protocol: ALLOWED_PROTOCOL_PATTERN, error: INVALID_BASE_URL_MESSAGE })
+      .optional(),
     /** Per-stage model override. Unset stages fall back to provider defaults. */
     models: z
       .object({

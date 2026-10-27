@@ -204,6 +204,16 @@ describe("model set — refusals", () => {
     expect(llm()).toBeUndefined();
   });
 
+  it("rejects a base URL whose protocol is not allowed", () => {
+    runModelSet("custom", { baseUrl: "file:///etc/models", model: "m" });
+    expect(llm()).toBeUndefined();
+  });
+
+  it("accepts an ftp base URL", () => {
+    runModelSet("custom", { baseUrl: "ftp://files.internal/models", model: "m" });
+    expect(llm()?.base_url).toBe("ftp://files.internal/models");
+  });
+
   it("rejects a malformed --header and writes nothing", () => {
     runModelSet("groq", { header: ["no-colon-here"] });
     expect(llm()).toBeUndefined();
