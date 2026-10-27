@@ -243,6 +243,48 @@ describe("resolveLlm — bad input", () => {
     expect(parsed.success).toBe(false);
   });
 
+  // The warning is user-facing: it must name the offending field and carry a
+  // non-empty reason, whatever wording the schema library uses.
+  function invalidWarning(llm: unknown): string {
+    const r = resolveLlm(makeProject(llm));
+    const warning = r.warnings.find((w) => w.includes("Invalid `llm` config"));
+    expect(warning).toBeDefined();
+    expect(r.providerId).toBe("anthropic");
+    return warning ?? "";
+  }
+
+  it("names an unknown key in the warning", () => {
+    const w = invalidWarning({ provider: "groq", typo_field: 1 });
+    expect(w).toContain("in .synapse/config.json");
+    expect(w).toMatch(/llm: Unrecognized key.*typo_field/);
+  });
+
+  it("names a misspelled per-stage model key in the warning", () => {
+    const w = invalidWarning({ provider: "groq", models: { generat: "x" } });
+    expect(w).toMatch(/models: Unrecognized key.*generat/);
+  });
+
+  it("names a bad provider and lists the valid ones in the warning", () => {
+    const w = invalidWarning({ provider: "gpt6" });
+    expect(w).toMatch(/provider: \S.+/);
+    expect(w).toContain('"anthropic"');
+    expect(w).toContain('"custom"');
+  });
+
+  it("names a bad base_url in the warning", () => {
+    const w = invalidWarning({ provider: "groq", base_url: "not-a-url" });
+    expect(w).toMatch(/base_url: Invalid URL/i);
+  });
+
+  it.each([
+    "http://localhost:11434/v1",
+    "http://127.0.0.1:8000/v1",
+    "http://gpu.internal:8000/v1",
+    "https://api.groq.com/openai/v1",
+  ])("accepts base_url %s", (base_url) => {
+    expect(LlmSettingsSchema.safeParse({ provider: "custom", base_url }).success).toBe(true);
+  });
+
   it("keeps OpenRouter's attribution headers", () => {
     const r = resolveLlm(makeProject({ provider: "openrouter" }));
     expect(r.headers["X-Title"]).toBe("Synapse CLI");

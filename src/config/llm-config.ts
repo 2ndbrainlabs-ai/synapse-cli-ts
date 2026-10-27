@@ -54,7 +54,7 @@ export const LlmSettingsSchema = z
     /** Which provider family drives local codegen. */
     provider: z.enum(PROVIDER_IDS as [ProviderId, ...ProviderId[]]),
     /** Endpoint root. Required for `custom`; overrides the default otherwise. */
-    base_url: z.string().url().optional(),
+    base_url: z.url().optional(),
     /** Per-stage model override. Unset stages fall back to provider defaults. */
     models: z
       .object({
