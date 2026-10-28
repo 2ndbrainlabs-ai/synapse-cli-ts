@@ -182,6 +182,17 @@ describe("verifyApiKey", () => {
     await expect(verifyApiKey("k")).resolves.toBe("unknown");
   });
 
+  it("doesn't retry an answer from the backend (200, 401, 5xx)", async () => {
+    for (const status of [200, 401, 503]) {
+      const fetchMock = vi.fn().mockResolvedValue(new Response("", { status }));
+      const onRetry = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      await verifyApiKey("k", { onRetry });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(onRetry).not.toHaveBeenCalled();
+    }
+  });
+
   it("checks the key even with telemetry disabled", async () => {
     process.env.SYNAPSE_TELEMETRY = "0";
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("", { status: 401 })));
@@ -190,5 +201,109 @@ describe("verifyApiKey", () => {
     } finally {
       delete process.env.SYNAPSE_TELEMETRY;
     }
+  });
+});
+
+// Cold start (SYN-321): a cold ui-backend takes ~14 s to answer /quota, past
+// the first attempt's 10 s timeout. verifyApiKey retries once with a longer
+// timeout and tells the caller, so a valid key still verifies.
+describe("verifyApiKey cold start", () => {
+  const savedApi = process.env.SYNAPSE_API_URL;
+
+  /** fetch that answers after `delayMs`, or rejects when its signal aborts. */
+  function slowFetch(delayMs: number, status = 200) {
+    return vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((resolve, reject) => {
+          const timer = setTimeout(() => resolve(new Response("{}", { status })), delayMs);
+          init?.signal?.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(new DOMException("aborted", "AbortError"));
+          });
+        }),
+    );
+  }
+
+  beforeEach(() => {
+    process.env.SYNAPSE_API_URL = "https://api.example.test";
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    if (savedApi === undefined) delete process.env.SYNAPSE_API_URL;
+    else process.env.SYNAPSE_API_URL = savedApi;
+  });
+
+  it("retries once after a timeout and verifies a key the cold backend accepts", async () => {
+    // First request hangs past 10 s (instance starting); the retry is answered
+    // by the now-warm instance.
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(slowFetch(60_000))
+      .mockImplementationOnce(slowFetch(4_000));
+    vi.stubGlobal("fetch", fetchMock);
+    const onRetry = vi.fn();
+
+    const result = verifyApiKey("syn_key", { onRetry });
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(4_000);
+
+    await expect(result).resolves.toBe("valid");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("gives the retry a longer timeout (~30 s in all)", async () => {
+    // The first attempt times out at 10 s; the retry needs 15 s, which only
+    // fits because the retry's timeout is longer (20 s).
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(slowFetch(25_000))
+      .mockImplementationOnce(slowFetch(15_000));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = verifyApiKey("syn_key");
+    await vi.advanceTimersByTimeAsync(25_000);
+    await expect(result).resolves.toBe("valid");
+  });
+
+  it("still reports a rejected key on the retry", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValueOnce(
+        new Response("", { status: 401 }),
+      ),
+    );
+    await expect(verifyApiKey("bad")).resolves.toBe("rejected");
+  });
+
+  it("reports unknown when both attempts time out, within ~30 s", async () => {
+    const fetchMock = vi.fn(slowFetch(120_000));
+    vi.stubGlobal("fetch", fetchMock);
+    const onRetry = vi.fn();
+
+    const result = verifyApiKey("syn_key", { onRetry });
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    await expect(result).resolves.toBe("unknown");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it("never lets a throwing onRetry break the check", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockRejectedValueOnce(new TypeError("fetch failed")).mockResolvedValueOnce(
+        new Response("{}", { status: 200 }),
+      ),
+    );
+    await expect(
+      verifyApiKey("k", {
+        onRetry: () => {
+          throw new Error("boom");
+        },
+      }),
+    ).resolves.toBe("valid");
   });
 });
