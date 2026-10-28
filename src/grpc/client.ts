@@ -155,12 +155,36 @@ const CHANNEL_OPTIONS = {
  */
 const RETRYABLE_GRPC_CODES = new Set<number>([
   4,  // DEADLINE_EXCEEDED
-  8,  // RESOURCE_EXHAUSTED
+  8,  // RESOURCE_EXHAUSTED (rate limiting only; see isRetryableGrpcError)
   10, // ABORTED
   13, // INTERNAL
   14, // UNAVAILABLE
   15, // DATA_LOSS
 ]);
+
+const RESOURCE_EXHAUSTED = 8;
+
+/**
+ * RESOURCE_EXHAUSTED details that mean a hard limit, not a burst: the
+ * backend's quota rejections ("Lines quota exceeded (…)", "MCP server quota
+ * exceeded (…)") and "Credits exhausted". Retrying these can't succeed, so
+ * the CLI surfaces them at once. "Rate limit exceeded" is not matched and
+ * keeps the backoff-and-retry behaviour.
+ */
+const HARD_LIMIT_RE = /quota|credit/i;
+
+/**
+ * Whether a gRPC stream error is worth re-issuing the RPC for (SYN-317).
+ * RESOURCE_EXHAUSTED is retried only when it is rate limiting.
+ */
+export function isRetryableGrpcError(err: { code?: unknown; details?: unknown }): boolean {
+  const code = typeof err.code === "number" ? err.code : undefined;
+  if (code === undefined || !RETRYABLE_GRPC_CODES.has(code)) return false;
+  if (code === RESOURCE_EXHAUSTED && HARD_LIMIT_RE.test(String(err.details ?? ""))) {
+    return false;
+  }
+  return true;
+}
 
 /** Sleep helper for exponential backoff between reconnect attempts. */
 function sleep(ms: number): Promise<void> {
@@ -464,8 +488,7 @@ export class SynapseClient {
 
       call.on("error", (err: any) => {
         client.close();
-        const code = err.code as number | undefined;
-        const transient = code !== undefined && RETRYABLE_GRPC_CODES.has(code);
+        const transient = isRetryableGrpcError(err);
         resolve({
           useCases: [],
           error: `gRPC error: ${err.code}: ${err.details ?? err.message}`,
@@ -701,9 +724,7 @@ export class SynapseClient {
 
       call.on("error", (err: any) => {
         client.close();
-        const code = err.code as number | undefined;
-        const transient =
-          !generationStarted && code !== undefined && RETRYABLE_GRPC_CODES.has(code);
+        const transient = !generationStarted && isRetryableGrpcError(err);
         resolve({
           success: false,
           error: `gRPC error: ${err.code ?? "UNKNOWN"}: ${err.details ?? err.message}`,
@@ -1021,8 +1042,7 @@ export class SynapseClient {
         });
       });
       call.on("error", (err: any) => {
-        const code = err.code as number | undefined;
-        const transient = code !== undefined && RETRYABLE_GRPC_CODES.has(code);
+        const transient = isRetryableGrpcError(err);
         finish({
           success: false, verdicts: [], shards_run: 0, cached_hits: 0,
           budget_dropped: 0,
@@ -1195,8 +1215,7 @@ export class SynapseClient {
         finish({ success: false, names: [], error: "stream ended before result", __transient: true });
       });
       call.on("error", (err: any) => {
-        const code = err.code as number | undefined;
-        const transient = code !== undefined && RETRYABLE_GRPC_CODES.has(code);
+        const transient = isRetryableGrpcError(err);
         finish({
           success: false, names: [],
           error: `gRPC error: ${err.code ?? "UNKNOWN"}: ${err.details ?? err.message}`,
