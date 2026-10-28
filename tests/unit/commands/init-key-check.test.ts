@@ -102,4 +102,66 @@ describe("synapse init key check", () => {
     expect(out).not.toMatch(/Rejected/);
     expect(fs.existsSync(path.join(project, ".synapse", "config.json"))).toBe(true);
   });
+
+  // SYN-321: the first request to a cold ui-backend can outlast the first
+  // attempt; init retries and says it's waking Synapse up.
+  it("verifies a valid key when the first request to a cold backend fails", async () => {
+    const quota = vi
+      .fn()
+      .mockRejectedValueOnce(new DOMException("aborted", "AbortError"))
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) =>
+        String(url).endsWith("/quota") ? quota() : new Response(null, { status: 200 }),
+      ),
+    );
+    await runInit({ force: false });
+    const out = printed.join("\n");
+    expect(out).toMatch(/Waking up Synapse/);
+    expect(out).toMatch(/API key verified/);
+    expect(out).not.toMatch(/continuing offline/);
+    expect(quota).toHaveBeenCalledTimes(2);
+  });
+
+  describe("init telemetry outcome", () => {
+    function stubWithTelemetry(quota: Response): ReturnType<typeof vi.fn> {
+      const fetchMock = vi.fn(async (url: string, _init?: RequestInit) =>
+        String(url).endsWith("/quota") ? quota : new Response(null, { status: 200 }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      return fetchMock;
+    }
+
+    async function initEvent(fetchMock: ReturnType<typeof vi.fn>): Promise<Record<string, unknown>> {
+      let body: Record<string, unknown> | undefined;
+      await vi.waitFor(() => {
+        const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/telemetry/cli"));
+        expect(call).toBeDefined();
+        body = JSON.parse((call![1] as RequestInit).body as string) as Record<string, unknown>;
+      });
+      return body!;
+    }
+
+    beforeEach(() => {
+      delete process.env.SYNAPSE_TELEMETRY;
+    });
+
+    it("sends success=true when init completes", async () => {
+      const fetchMock = stubWithTelemetry(new Response("{}", { status: 200 }));
+      await runInit({ force: false });
+      const body = await initEvent(fetchMock);
+      expect(body.event_type).toBe("init");
+      expect(body.success).toBe(true);
+      expect(body).not.toHaveProperty("error_code");
+    });
+
+    it("sends success=false and AUTH_INVALID when the key is rejected", async () => {
+      const fetchMock = stubWithTelemetry(new Response("", { status: 401 }));
+      await runInit({ force: false });
+      const body = await initEvent(fetchMock);
+      expect(body.success).toBe(false);
+      expect(body.error_code).toBe("AUTH_INVALID");
+    });
+  });
 });

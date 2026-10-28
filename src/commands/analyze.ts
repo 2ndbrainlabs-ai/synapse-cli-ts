@@ -14,6 +14,9 @@ import { kvGrid } from "../ui/kv-grid.js";
 import { displayHeader } from "../ui/banner.js";
 import { EMOJI, OK } from "../ui/icons.js";
 
+/** error_code for a failed analyze in telemetry. */
+export const ANALYZE_FAILED = "ANALYZE_FAILED";
+
 export async function runAnalyze(
   outputDir: string,
   verbose: boolean,
@@ -91,7 +94,9 @@ export async function runAnalyze(
 
       const delta = Math.max(totalLines - prevLines, 0);
       if (delta > 0 && apiKey) {
-        trackEvent("analyze", apiKey, workingDir, delta).catch(() => {});
+        trackEvent("analyze", apiKey, workingDir, delta, 0, 0, 0, "hosted", {
+          success: true,
+        }).catch(() => {});
       }
 
       try {
@@ -106,6 +111,7 @@ export async function runAnalyze(
       /* optional */
     }
   } catch (err) {
+    sendAnalyzeFailure(workingDir);
     roundedBox("Analysis Failed", "✖", t.err, [
       err instanceof Error ? err.message : String(err),
     ]);
@@ -113,6 +119,25 @@ export async function runAnalyze(
       console.log(`\n${t.dim(err.stack)}`);
     }
   }
+}
+
+/** Report a failed analyze (SYN-321) — fire-and-forget, never throws. */
+function sendAnalyzeFailure(workingDir: string): void {
+  let apiKey = "";
+  try {
+    apiKey = resolveApiKey(workingDir) ?? "";
+  } catch {
+    /* optional */
+  }
+  if (!apiKey) return;
+  void import("../grpc/telemetry.js")
+    .then(({ trackEvent }) =>
+      trackEvent("analyze", apiKey, workingDir, 0, 0, 0, 0, "hosted", {
+        success: false,
+        errorCode: ANALYZE_FAILED,
+      }),
+    )
+    .catch(() => {});
 }
 
 function renderResults(

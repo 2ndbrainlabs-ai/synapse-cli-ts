@@ -15,8 +15,9 @@ import {
 import { getProjectSynapseDir } from "../config/paths.js";
 import { t, stepOk, stepInfo } from "../ui/theme.js";
 import { roundedBox } from "../ui/box.js";
-import { apiKeySourceLabel } from "../ui/errors.js";
+import { apiKeySourceLabel, ERROR_CODES } from "../ui/errors.js";
 import { displayBanner, displayHeader, displayWelcome } from "../ui/banner.js";
+import type { ApiKeyCheck } from "../grpc/telemetry.js";
 import { styledInput } from "../ui/styled-input.js";
 
 export interface RunInitOptions {
@@ -93,7 +94,7 @@ async function runHostedInit(workingDir: string, synapseDir: string): Promise<vo
     stepOk("API key saved", "encrypted");
   }
 
-  await checkApiKey(rawKey, keySource);
+  const keyCheck = await checkApiKey(rawKey, keySource);
 
   // Stamp mode: "hosted" on the project config so it's explicit.
   const configPath = path.join(synapseDir, "config.json");
@@ -110,9 +111,16 @@ async function runHostedInit(workingDir: string, synapseDir: string): Promise<vo
     saveConfig(workingDir, cfg);
   }
 
+  // Init itself always completes; a key the backend rejected is the one way
+  // it ends unusable. An unverified key (backend unreachable) still counts
+  // as success — init is offline-tolerant.
   try {
     const { trackEvent } = await import("../grpc/telemetry.js");
-    trackEvent("init", rawKey ?? "", workingDir).catch(() => {});
+    const outcome =
+      keyCheck === "rejected"
+        ? { success: false, errorCode: ERROR_CODES.AUTH_INVALID }
+        : { success: true };
+    trackEvent("init", rawKey ?? "", workingDir, 0, 0, 0, 0, "hosted", outcome).catch(() => {});
   } catch {
     /* optional */
   }
@@ -123,19 +131,25 @@ async function runHostedInit(workingDir: string, synapseDir: string): Promise<vo
 /**
  * Check the key against the backend (GET /quota) so a bad key shows up now
  * rather than mid-build. Offline-tolerant: if the backend can't be reached
- * the key is kept and init carries on.
+ * the key is kept and init carries on. If the first attempt times out, the
+ * API is probably cold-starting, so say so while the retry runs.
  */
-async function checkApiKey(rawKey: string, source: ApiKeySource | "entered"): Promise<void> {
+async function checkApiKey(
+  rawKey: string,
+  source: ApiKeySource | "entered",
+): Promise<ApiKeyCheck> {
   const { verifyApiKey } = await import("../grpc/telemetry.js");
-  const result = await verifyApiKey(rawKey);
+  const result = await verifyApiKey(rawKey, {
+    onRetry: () => stepInfo("Waking up Synapse…", "this can take up to 30 seconds after a quiet spell"),
+  });
 
   if (result === "valid") {
     stepOk("API key verified");
-    return;
+    return result;
   }
   if (result === "unknown") {
     stepInfo("Couldn't reach Synapse to verify the API key", "continuing offline");
-    return;
+    return result;
   }
 
   const from = source === "entered" ? "you entered" : `from ${apiKeySourceLabel(source)}`;
@@ -152,4 +166,5 @@ async function checkApiKey(rawKey: string, source: ApiKeySource | "entered"): Pr
     "",
     ...fix,
   ]);
+  return result;
 }

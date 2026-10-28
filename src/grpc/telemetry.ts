@@ -91,14 +91,28 @@ export async function trackEvent(
 // ---------------------------------------------------------------------------
 // API key check — used by `synapse init` (SYN-314). Not telemetry, so it runs
 // even with SYNAPSE_TELEMETRY=0. Anything other than a clear accept/reject
-// (offline, timeout, 5xx) is "unknown" and must never block the caller. The
-// timeout allows for a Cloud Run cold start on the API.
+// (offline, timeout, 5xx) is "unknown" and must never block the caller.
+//
+// A Cloud Run cold start on the API takes ~14 s (SYN-321), longer than a
+// normal request should, so a timeout or network error on the first attempt
+// is retried once with a longer timeout — ~30 s in all. `onRetry` lets the
+// caller tell the user why init is waiting.
 // ---------------------------------------------------------------------------
 
 export type ApiKeyCheck = "valid" | "rejected" | "unknown";
 
-export async function verifyApiKey(apiKey: string, timeoutMs = 10_000): Promise<ApiKeyCheck> {
-  if (!apiKey) return "rejected";
+export interface VerifyApiKeyOptions {
+  /** Timeout for the first attempt. */
+  timeoutMs?: number;
+  /** Timeout for the single retry after a timeout or network error. */
+  retryTimeoutMs?: number;
+  /** Called once, just before the retry. */
+  onRetry?: () => void;
+}
+
+type KeyAttempt = ApiKeyCheck | "unreachable";
+
+async function checkKeyOnce(apiKey: string, timeoutMs: number): Promise<KeyAttempt> {
   try {
     const apiUrl = getApiUrl().replace(/\/+$/, "");
     const controller = new AbortController();
@@ -111,8 +125,26 @@ export async function verifyApiKey(apiKey: string, timeoutMs = 10_000): Promise<
     if (resp.status === 401 || resp.status === 403) return "rejected";
     return "unknown";
   } catch {
-    return "unknown";
+    // Timeout (abort) or network error — the API may still be starting up.
+    return "unreachable";
   }
+}
+
+export async function verifyApiKey(
+  apiKey: string,
+  opts: VerifyApiKeyOptions = {},
+): Promise<ApiKeyCheck> {
+  if (!apiKey) return "rejected";
+  const { timeoutMs = 10_000, retryTimeoutMs = 20_000, onRetry } = opts;
+  const first = await checkKeyOnce(apiKey, timeoutMs);
+  if (first !== "unreachable") return first;
+  try {
+    onRetry?.();
+  } catch {
+    // A status callback must never break the check.
+  }
+  const second = await checkKeyOnce(apiKey, retryTimeoutMs);
+  return second === "unreachable" ? "unknown" : second;
 }
 
 // ---------------------------------------------------------------------------

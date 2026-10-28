@@ -6,10 +6,12 @@
 //   - the first 8 hex chars of the repo hash (git HEAD SHA when available,
 //     else SHA-256 of the absolute repo path) — so discover jobs across
 //     branches / commits don't collide,
-//   - a base-36 wall-clock stamp for chronological sort.
+//   - a base-36 wall-clock stamp for chronological sort,
+//   - a random suffix, so concurrent runs in the same repo started in the
+//     same millisecond never share an id (and a ledger file) — SYN-321.
 
 import { execSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 
 /** Cheap fingerprint of the target repo. Prefers `git rev-parse HEAD` so a
  *  new commit invalidates prior sessions cleanly; falls back to the absolute
@@ -28,8 +30,10 @@ export function computeRepoHash(workingDir: string): string {
   return createHash("sha256").update(workingDir).digest("hex");
 }
 
-/** Deterministic prefix for humans: sess_<first-8-hex>_<ts36>. */
+/** Readable prefix for humans: sess_<first-8-hex>_<ts36>_<rand6>. The id is
+ *  used as-is for the ledger file name, so it must stay filename-safe. */
 export function newSessionId(repoHash: string): string {
   const ts = Date.now().toString(36);
-  return `sess_${repoHash.slice(0, 8)}_${ts}`;
+  const rand = randomBytes(3).toString("hex");
+  return `sess_${repoHash.slice(0, 8)}_${ts}_${rand}`;
 }
