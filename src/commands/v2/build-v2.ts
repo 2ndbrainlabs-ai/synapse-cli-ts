@@ -40,6 +40,12 @@ import { computeRepoHash, newSessionId } from "../../session/session-id.js";
 import { readCliVersion } from "../../utils/version.js";
 import { hasSelectionFlags } from "./endpoint-picker.js";
 import { BuildFailure, OUTCOME_CODES, type BuildReport } from "./build-outcome.js";
+import { getProjectSynapseDir } from "../../config/paths.js";
+import {
+  reportIndexedLines,
+  showQuotaExceeded,
+  type LinesReport,
+} from "../shared/lines-delta.js";
 
 export interface BuildV2Options {
   auto?: boolean;
@@ -203,6 +209,24 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
     }
     apiKey = resolved;
     ctx.apiKey = apiKey;
+
+    // Pre-flight quota check (mirrors v1 build.ts). Fails open: an
+    // unreachable quota endpoint never blocks the build. Runs even with
+    // SYNAPSE_TELEMETRY=0 — that flag only turns off analytics events.
+    // The block is thrown outside the try so the fail-open catch can't
+    // swallow it.
+    let quotaExceeded = false;
+    let quotaMessage = "";
+    try {
+      const { checkQuota } = await import("../../grpc/telemetry.js");
+      [quotaExceeded, quotaMessage] = await checkQuota(apiKey);
+    } catch {
+      /* fail open */
+    }
+    if (quotaExceeded) {
+      showQuotaExceeded(quotaMessage);
+      throw new BuildFailure(OUTCOME_CODES.QUOTA_EXCEEDED);
+    }
   }
 
   sectionHeader("Build MCP Server (v2)", "🏗️");
@@ -331,6 +355,34 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
     "Language",
     `${manifest.language}${manifest.framework ? ` / ${manifest.framework}` : ""}`,
   );
+
+  // ---------------------------------------------------------------------------
+  // Lines-indexed quota (hosted only — local builds never count against it).
+  // Send the lines this repo added since the last accepted report, BEFORE any
+  // code generation, so a 429 stops the build. Other failures (401, 5xx,
+  // timeout) fail open: the build continues and the same lines are resent
+  // next time because the baseline only moves on success (SYN-315).
+  // ---------------------------------------------------------------------------
+  if (effectiveMode === "hosted") {
+    let report: LinesReport | undefined;
+    try {
+      report = await reportIndexedLines({
+        apiKey,
+        workingDir,
+        synapseDir: getProjectSynapseDir(workingDir),
+        totalLines: manifest.lines_scanned ?? 0,
+        key: "v2_lines_indexed",
+        highWater: true,
+      });
+    } catch {
+      /* fail open — accounting must never crash the build */
+    }
+    if (report?.kind === "quota_exceeded") {
+      session.dispose();
+      showQuotaExceeded(report.message);
+      throw new BuildFailure(OUTCOME_CODES.QUOTA_EXCEEDED);
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Dispatch — Auto or Custom.

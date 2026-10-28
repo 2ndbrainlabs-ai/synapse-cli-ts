@@ -8,12 +8,13 @@ import path from "node:path";
 
 const state = vi.hoisted(() => ({
   failAnalyze: false,
-  trackEvent: null as null | ((...args: unknown[]) => Promise<void>),
+  trackEvent: null as null | ((...args: unknown[]) => Promise<unknown>),
 }));
 
 vi.mock("../../../src/grpc/telemetry.js", () => ({
   trackEvent: (...args: unknown[]) => state.trackEvent!(...args),
   checkQuota: async () => [false, ""],
+  isQuotaExceeded: () => false,
 }));
 
 vi.mock("../../../src/analyzer/codebase-analyzer.js", async (importOriginal) => {
@@ -43,8 +44,8 @@ describe("analyze telemetry outcome", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     process.env.SYNAPSE_API_KEY = "syn_env_key";
     state.failAnalyze = false;
-    trackEvent = vi.fn().mockResolvedValue(undefined);
-    state.trackEvent = trackEvent as unknown as (...args: unknown[]) => Promise<void>;
+    trackEvent = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    state.trackEvent = trackEvent as unknown as (...args: unknown[]) => Promise<unknown>;
   });
 
   afterEach(() => {

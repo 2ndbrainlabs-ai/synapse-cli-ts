@@ -6,6 +6,7 @@ import type { SurfaceManifest } from "../core/surface-manifest.js";
 import type { SessionManager } from "../../session/session-manager.js";
 import { sniffCandidateFiles } from "../core/prefilter.js";
 import { NEEDLE_TABLE } from "../core/needles.js";
+import { countLines } from "../../utils/lines.js";
 import { parseJavaFile, pathJavaToModule } from "./java-parse.js";
 
 export async function extractJavaSurfaceStreamed(opts: {
@@ -18,6 +19,7 @@ export async function extractJavaSurfaceStreamed(opts: {
   const endpoints: any[] = [];
   const functions: any[] = [];
   const frameworkCounts = new Map<string, number>();
+  let linesScanned = 0;
 
   for await (const match of sniffCandidateFiles({
     workingDir,
@@ -28,6 +30,7 @@ export async function extractJavaSurfaceStreamed(opts: {
     try {
       const source = await fs.readFile(match.path, "utf-8");
       const result = parseJavaFile({ source, relPath: match.relPath, module: pathJavaToModule(match.relPath) });
+      linesScanned += countLines(source);
       endpoints.push(...result.endpoints);
       if (opts.captureFunctions !== false) functions.push(...result.functions);
       for (const f of result.frameworkHits) {
@@ -50,5 +53,6 @@ export async function extractJavaSurfaceStreamed(opts: {
     endpoints,
     functions,
     package_import_root: path.basename(workingDir),
+    lines_scanned: linesScanned,
   };
 }

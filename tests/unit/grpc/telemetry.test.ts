@@ -18,7 +18,13 @@ vi.mock("../../../src/utils/version.js", async (importOriginal) => {
   };
 });
 
-import { trackEvent, verifyApiKey } from "../../../src/grpc/telemetry.js";
+import {
+  trackEvent,
+  verifyApiKey,
+  checkQuota,
+  getQuotaInfo,
+  isQuotaExceeded,
+} from "../../../src/grpc/telemetry.js";
 import { readCliVersion } from "../../../src/utils/version.js";
 
 const PKG_VERSION = (
@@ -84,7 +90,157 @@ describe("trackEvent cli_version", () => {
 
   it("never throws when the request fails", async () => {
     fetchMock.mockRejectedValue(new Error("network down"));
-    await expect(trackEvent("build", "syn_key", "/tmp/project")).resolves.toBeUndefined();
+    await expect(trackEvent("build", "syn_key", "/tmp/project")).resolves.toEqual({
+      ok: false,
+      status: 0,
+    });
+  });
+});
+
+// SYN-315: trackEvent reports the outcome, and SYNAPSE_TELEMETRY=0 turns off
+// analytics but not quota enforcement.
+describe("trackEvent result and SYNAPSE_TELEMETRY (SYN-315)", () => {
+  const FAKE_KEY = "syn_live_test_00000000000000000000";
+  const saved = {
+    api: process.env.SYNAPSE_API_URL,
+    telemetry: process.env.SYNAPSE_TELEMETRY,
+  };
+  let fetchMock: ReturnType<typeof vi.fn>;
+
+  function json(status: number, body: unknown): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  beforeEach(() => {
+    process.env.SYNAPSE_API_URL = "https://api.example.test";
+    delete process.env.SYNAPSE_TELEMETRY;
+    fetchMock = vi.fn().mockResolvedValue(new Response(null, { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    if (saved.api === undefined) delete process.env.SYNAPSE_API_URL;
+    else process.env.SYNAPSE_API_URL = saved.api;
+    if (saved.telemetry === undefined) delete process.env.SYNAPSE_TELEMETRY;
+    else process.env.SYNAPSE_TELEMETRY = saved.telemetry;
+  });
+
+  it("returns ok and the status on success", async () => {
+    await expect(trackEvent("analyze", FAKE_KEY, "/tmp/p", 10)).resolves.toEqual({
+      ok: true,
+      status: 200,
+    });
+  });
+
+  it("returns the status and server detail on a 429", async () => {
+    fetchMock.mockResolvedValue(json(429, { detail: "Lines analyzed quota exceeded." }));
+    const r = await trackEvent("analyze", FAKE_KEY, "/tmp/p", 10);
+    expect(r).toEqual({ ok: false, status: 429, detail: "Lines analyzed quota exceeded." });
+    expect(isQuotaExceeded(r)).toBe(true);
+  });
+
+  it("does not treat a 429 without a quota detail as a quota block", () => {
+    expect(isQuotaExceeded({ ok: false, status: 429 })).toBe(false);
+    expect(isQuotaExceeded({ ok: false, status: 429, detail: "Too Many Requests" })).toBe(false);
+    expect(isQuotaExceeded({ ok: false, status: 429, detail: "Demo rate limit exceeded" })).toBe(false);
+    expect(
+      isQuotaExceeded({
+        ok: false,
+        status: 429,
+        detail: "Lines analyzed quota exceeded. Contact synaps3.ai for extended limits.",
+      }),
+    ).toBe(true);
+    expect(isQuotaExceeded({ ok: false, status: 500, detail: "quota" })).toBe(false);
+  });
+
+  it("does not treat the per-key rate limit as a quota block", async () => {
+    fetchMock.mockResolvedValue(json(429, { detail: "Rate limit exceeded" }));
+    const r = await trackEvent("analyze", FAKE_KEY, "/tmp/p", 10);
+    expect(r.status).toBe(429);
+    expect(isQuotaExceeded(r)).toBe(false);
+  });
+
+  it("returns ok:false for 401 and 500", async () => {
+    fetchMock.mockResolvedValueOnce(json(401, { detail: "Invalid API key" }));
+    expect(await trackEvent("analyze", FAKE_KEY, "/tmp/p", 10)).toMatchObject({
+      ok: false,
+      status: 401,
+    });
+    fetchMock.mockResolvedValueOnce(new Response("oops", { status: 500 }));
+    expect(await trackEvent("analyze", FAKE_KEY, "/tmp/p", 10)).toEqual({
+      ok: false,
+      status: 500,
+    });
+  });
+
+  it("returns status 0 on a timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      fetchMock.mockImplementation(
+        (_url: string, init: RequestInit) =>
+          new Promise((_, reject) => {
+            init.signal?.addEventListener("abort", () => reject(new Error("aborted")));
+          }),
+      );
+      const pending = trackEvent("analyze", FAKE_KEY, "/tmp/p", 10);
+      await vi.advanceTimersByTimeAsync(3000);
+      await expect(pending).resolves.toEqual({ ok: false, status: 0 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("skips analytics events when SYNAPSE_TELEMETRY=0", async () => {
+    process.env.SYNAPSE_TELEMETRY = "0";
+    await expect(trackEvent("build", FAKE_KEY, "/tmp/p", 0, 3)).resolves.toEqual({
+      ok: false,
+      status: 0,
+    });
+    await trackEvent("init", FAKE_KEY, "/tmp/p");
+    await trackEvent("build", "", "/tmp/p", 0, 0, 0, 0, "local");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("still sends the hosted line-count event, minimal, when SYNAPSE_TELEMETRY=0", async () => {
+    process.env.SYNAPSE_TELEMETRY = "0";
+    const r = await trackEvent("analyze", FAKE_KEY, "/tmp/p", 1000);
+    expect(r).toEqual({ ok: true, status: 200 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://api.example.test/telemetry/cli");
+    expect((init.headers as Record<string, string>).Authorization).toBe(`Bearer ${FAKE_KEY}`);
+    expect(JSON.parse(init.body as string)).toEqual({
+      event_type: "analyze",
+      lines_count: 1000,
+      mode: "hosted",
+    });
+  });
+
+  it("does not send an analyze event with no lines when SYNAPSE_TELEMETRY=0", async () => {
+    process.env.SYNAPSE_TELEMETRY = "0";
+    await trackEvent("analyze", FAKE_KEY, "/tmp/p", 0);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("runs checkQuota even when SYNAPSE_TELEMETRY=0", async () => {
+    process.env.SYNAPSE_TELEMETRY = "0";
+    fetchMock.mockResolvedValue(json(200, { quota_exceeded: true, quota_message: "Over quota" }));
+    await expect(checkQuota(FAKE_KEY)).resolves.toEqual([true, "Over quota"]);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.example.test/quota");
+  });
+
+  it("runs getQuotaInfo even when SYNAPSE_TELEMETRY=0", async () => {
+    process.env.SYNAPSE_TELEMETRY = "false";
+    fetchMock.mockResolvedValue(
+      json(200, { lines_indexed: 100_001, max_lines_indexed: 100_000, quota_exceeded: true }),
+    );
+    const info = await getQuotaInfo(FAKE_KEY);
+    expect(info).toMatchObject({ linesIndexed: 100_001, quotaExceeded: true });
   });
 });
 
