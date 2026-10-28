@@ -210,6 +210,23 @@ describe("synapse build exit codes", () => {
     expect(outcome).toMatchObject({ errorCode: "BACKEND_UNAVAILABLE" });
   });
 
+  it("exits non-zero with the server's quota message on a gRPC quota rejection (SYN-317)", async () => {
+    const quotaMsg = "Lines quota exceeded (1200/1000). Contact synaps3.ai for extended limits.";
+    mocks.buildCustom = vi
+      .fn()
+      .mockResolvedValue(customResult({ error: `gRPC error: 8: ${quotaMsg}` }));
+    await runBuildV2({ custom: true, query: "score patients" });
+
+    expect(mocks.buildCustom).toHaveBeenCalledTimes(1);
+    expect(process.exitCode).toBe(1);
+    const out = output();
+    expect(out).toContain(quotaMsg);
+    expect(out).toMatch(/QUOTA_EXCEEDED/);
+    expect(out).not.toMatch(/attempts/);
+    const [, , , , outcome] = await buildEvent();
+    expect(outcome).toMatchObject({ success: false, errorCode: "QUOTA_EXCEEDED" });
+  });
+
   it("exits 0 and reports success with one tool for a custom build that writes a file", async () => {
     mocks.buildCustom = vi.fn().mockResolvedValue(
       customResult({
