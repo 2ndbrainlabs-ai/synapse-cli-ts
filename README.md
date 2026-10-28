@@ -55,6 +55,8 @@ synapse build --custom --query "Expose user auth and profile lookup as one MCP t
 
 The free tier includes **10 MCP servers and 100,000 indexed lines**. `synapse info` shows your current usage.
 
+Indexed lines are the lines of the source files a hosted build scans (`synapse analyze` counts every Python file). Each run reports only the lines added since the last accepted report, so rebuilding an unchanged repo costs nothing. Local builds (`--local`) are never counted.
+
 ## Build modes: Auto and Custom
 
 `synapse build` runs the **v2 engine** by default. It detects your project's language, extracts its surface locally, and then builds in one of two modes:
@@ -367,7 +369,7 @@ Stored `models` and capability flags apply **only to the provider they were save
 | `SYNAPSE_LLM_BASE_URL` | Endpoint root, overriding stored config |
 | `SYNAPSE_LLM_API_KEY` | Key fallback for any provider |
 | `SYNAPSE_LLM_TIMEOUT_MS` | Per-request timeout, default `300000` (5 min). Raise it for slow local inference. |
-| `SYNAPSE_TELEMETRY=0` | Opt out of anonymous usage telemetry |
+| `SYNAPSE_TELEMETRY=0` | Opt out of anonymous usage telemetry. Hosted quota checks and line-count reporting still run (see [What leaves your machine](#what-leaves-your-machine)) |
 
 Plus the provider-specific key variables in the table above.
 
@@ -452,6 +454,7 @@ The legacy v1 engine (`--engine v1`) works differently: a hosted agent explores 
 | Hosted v1 (`--engine v1`) | Synapse backend | The project schema from `synapse analyze`, plus the contents of the files, search results and symbols the agent asks for. |
 | `--local` | Your chosen model provider | Custom mode and `--smart-names` send the same kind of content as the hosted rows above. Auto mode without `--smart-names` calls no model. Nothing goes to Synapse except telemetry. |
 | Telemetry (all modes) | Synapse API | Event name, mode, counts, model name, token counts and timings, plus SHA-256 hashes of your working directory path, your machine/user and (for `--local` model calls) each prompt. Hosted events are tied to your API key. No code, no prompts. Turn off with `SYNAPSE_TELEMETRY=0`. |
+| Quota (hosted builds and `synapse analyze`) | Synapse API | A quota check before the build, and the number of newly indexed lines, both authenticated with your API key. Sent even with `SYNAPSE_TELEMETRY=0`, because the free-tier limit is enforced from it; with telemetry off the line count goes alone (event name, line count, mode), with no hashes, installation id or CLI version. Not sent for `--local` builds. |
 
 Hosted smart naming and Custom mode do read your code. We don't log or host your code. For hosted Auto builds, your account stores the endpoint config listed above so the runner can serve your tools.
 

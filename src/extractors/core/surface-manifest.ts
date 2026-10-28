@@ -75,6 +75,11 @@ export interface SurfaceManifest {
   /** Custom-mode ranked tail: candidates below the top-K score bar. The CLI
    *  can offer "show more" here if the user wants a wider pick. */
   background_functions?: SurfaceFunction[];
+  /** Total lines of the source files that produced this manifest (parsed
+   *  files plus unchanged files replayed from the ledger). Used for the
+   *  hosted lines-indexed quota (SYN-315). CLI-side only: never serialized
+   *  onto the wire (see manifest-wire.ts). */
+  lines_scanned?: number;
 }
 
 // -----------------------------------------------------------------------------

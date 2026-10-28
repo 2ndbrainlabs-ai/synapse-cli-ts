@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { isInitialized, resolveApiKey } from "../config/manager.js";
 import { getProjectSynapseDir } from "../config/paths.js";
 import {
@@ -13,6 +11,7 @@ import { Spinner } from "../ui/spinner.js";
 import { kvGrid } from "../ui/kv-grid.js";
 import { displayHeader } from "../ui/banner.js";
 import { EMOJI, OK } from "../ui/icons.js";
+import { reportIndexedLines, showQuotaExceeded } from "./shared/lines-delta.js";
 
 /** error_code for a failed analyze in telemetry. */
 export const ANALYZE_FAILED = "ANALYZE_FAILED";
@@ -74,39 +73,19 @@ export async function runAnalyze(
     console.log();
     renderResults(statistics, chunkCount, outputDir);
 
-    // Telemetry — only report delta lines (newly analyzed)
+    // Quota accounting — report only the lines not reported before. The
+    // baseline in statistics.prev.json moves only when the server accepts the
+    // event, so lines from a failed send are sent again next run (SYN-315).
     try {
-      const { trackEvent } = await import("../grpc/telemetry.js");
-      const apiKey = resolveApiKey(workingDir) ?? "";
-      const totalLines = statistics.total_lines_analyzed;
-
-      let prevLines = 0;
-      const prevStatsPath = path.join(synapseDir, "statistics.prev.json");
-      try {
-        if (fs.existsSync(prevStatsPath)) {
-          prevLines =
-            JSON.parse(fs.readFileSync(prevStatsPath, "utf-8"))
-              .total_lines_analyzed ?? 0;
-        }
-      } catch {
-        /* ignore */
-      }
-
-      const delta = Math.max(totalLines - prevLines, 0);
-      if (delta > 0 && apiKey) {
-        trackEvent("analyze", apiKey, workingDir, delta, 0, 0, 0, "hosted", {
-          success: true,
-        }).catch(() => {});
-      }
-
-      try {
-        fs.writeFileSync(
-          prevStatsPath,
-          JSON.stringify({ total_lines_analyzed: totalLines }),
-        );
-      } catch {
-        /* non-fatal */
-      }
+      const report = await reportIndexedLines({
+        apiKey: resolveApiKey(workingDir) ?? "",
+        workingDir,
+        synapseDir,
+        totalLines: statistics.total_lines_analyzed,
+        key: "total_lines_analyzed",
+        outcome: { success: true },
+      });
+      if (report.kind === "quota_exceeded") showQuotaExceeded(report.message);
     } catch {
       /* optional */
     }

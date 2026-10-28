@@ -28,6 +28,7 @@ import { NEEDLE_TABLE } from "../core/needles.js";
 import { sniffCandidateFiles } from "../core/prefilter.js";
 import { ParsePool } from "../core/parse-pool.js";
 import { pathToModule } from "./python-parse.js";
+import { countLines } from "../../utils/lines.js";
 import type { SessionManager } from "../../session/session-manager.js";
 
 // -----------------------------------------------------------------------------
@@ -83,6 +84,8 @@ interface ParseJobInput {
   source: string;
   relPath: string;
   sha: string;
+  /** Line count of `source`, added to lines_scanned once the parse succeeds. */
+  lines: number;
 }
 
 export async function extractPythonSurfaceStreamed(
@@ -101,6 +104,8 @@ export async function extractPythonSurfaceStreamed(
   let filesParsed = 0;
   let filesFailed = 0;
   let filesSkippedUnchanged = 0;
+  // Lines of every file that contributes to the manifest (SYN-315 quota).
+  let linesScanned = 0;
   let sniffStats = { filesSeen: 0, filesMatched: 0, filesSkipped: 0 };
   const startTs = Date.now();
 
@@ -159,6 +164,7 @@ export async function extractPythonSurfaceStreamed(
       endpoints.push(...out.endpoints);
       if (captureFns) functions.push(...out.functions);
       filesParsed++;
+      linesScanned += job.lines;
 
       const scannedAt = Date.now();
       session.append({
@@ -189,6 +195,16 @@ export async function extractPythonSurfaceStreamed(
         endpoints.push(...cached.endpoints);
         if (captureFns) functions.push(...cached.functions);
         filesSkippedUnchanged++;
+        // Unchanged files still count toward the repo's total so a resumed
+        // run reports the same total as a fresh one. The head is the whole
+        // file when it fits in the prefilter buffer; otherwise read it.
+        try {
+          linesScanned += countLines(
+            hit.fullHashed ? hit.head.toString("utf-8") : await fs.readFile(hit.path, "utf-8"),
+          );
+        } catch {
+          /* unreadable now: leave it out of the count */
+        }
         session.bumpProgress({
           endpointsFound: endpoints.length,
           functionsFound: functions.length,
@@ -212,7 +228,7 @@ export async function extractPythonSurfaceStreamed(
         continue;
       }
 
-      batch.push({ source, relPath, sha: hit.sha });
+      batch.push({ source, relPath, sha: hit.sha, lines: countLines(source) });
       if (batch.length >= batchSize) {
         await flush();
         if (session.aborted) break;
@@ -241,6 +257,7 @@ export async function extractPythonSurfaceStreamed(
     functions,
     package_import_root: packageRoot,
     partial,
+    lines_scanned: linesScanned,
     stats: {
       filesSeen: sniffStats.filesSeen,
       filesMatched: sniffStats.filesMatched,
