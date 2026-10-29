@@ -48,6 +48,7 @@ vi.mock("../../../src/config/llm-config.js", async (importOriginal) => {
 });
 
 const { runBuildV2 } = await import("../../../src/commands/v2/build-v2.js");
+const { runAnalyze } = await import("../../../src/commands/analyze.js");
 
 const API = "https://api.example.test";
 const FAKE_KEY = "syn_live_test_00000000000000000000";
@@ -93,6 +94,11 @@ async function buildEvent(): Promise<Record<string, unknown>> {
 }
 
 const prevPath = () => path.join(cwd, ".synapse", "statistics.prev.json");
+const baseline = (n: number) => ({
+  lines_indexed: n,
+  total_lines_analyzed: n,
+  v2_lines_indexed: n,
+});
 const prevFile = () => (fs.existsSync(prevPath()) ? fs.readFileSync(prevPath(), "utf-8") : null);
 
 /** A FastAPI app of exactly `n` lines (trailing newline included). */
@@ -175,7 +181,7 @@ describe("v2 hosted build: lines quota (SYN-315)", () => {
     expect(analyze[0].method).toBe("POST");
     expect(analyze[0].body).toMatchObject({ lines_count: 1000, mode: "hosted" });
     expect(flows.runAutoFlow).toHaveBeenCalledTimes(1);
-    expect(JSON.parse(prevFile()!)).toEqual({ v2_lines_indexed: 1000 });
+    expect(JSON.parse(prevFile()!)).toEqual(baseline(1000));
     expect(process.exitCode).toBeUndefined();
   });
 
@@ -246,7 +252,7 @@ describe("v2 hosted build: lines quota (SYN-315)", () => {
     fetchMock.mockClear();
     await runBuildV2({ auto: true });
     expect(events("analyze").map((e) => e.body?.lines_count)).toEqual([1000]);
-    expect(JSON.parse(prevFile()!)).toEqual({ v2_lines_indexed: 1000 });
+    expect(JSON.parse(prevFile()!)).toEqual(baseline(1000));
   });
 
   it("keeps the baseline after a failed send even when one exists", async () => {
@@ -278,6 +284,64 @@ describe("v2 hosted build: lines quota (SYN-315)", () => {
     expect(build).toMatchObject({ success: true, mode: "hosted" });
     expect(build).not.toHaveProperty("lines_count");
     expect(build).not.toHaveProperty("error_code");
+  });
+});
+
+// analyze and hosted builds share one baseline: the same lines are charged
+// once, whichever command runs first (SYN-315).
+describe("analyze and v2 hosted build share one lines baseline", () => {
+  const charged = () => events("analyze").map((e) => e.body?.lines_count);
+
+  it("analyze then build on unchanged code charges the build nothing", async () => {
+    await runAnalyze(".synapse", false);
+    expect(charged()).toEqual([1000]);
+    fetchMock.mockClear();
+
+    await runBuildV2({ custom: true, query: "orders" });
+    await runBuildV2({ auto: true });
+
+    expect(charged()).toEqual([]);
+    expect(flows.runCustomFlow).toHaveBeenCalledTimes(1);
+    expect(flows.runAutoFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("build then analyze on unchanged code charges analyze nothing", async () => {
+    await runBuildV2({ auto: true });
+    expect(charged()).toEqual([1000]);
+    fetchMock.mockClear();
+
+    await runAnalyze(".synapse", false);
+
+    expect(charged()).toEqual([]);
+    expect(JSON.parse(prevFile()!)).toEqual(baseline(1000));
+  });
+
+  it("charges growth once, whichever command sees it first", async () => {
+    await runAnalyze(".synapse", false);
+    writeRepo(cwd, 1300);
+    fetchMock.mockClear();
+
+    await runBuildV2({ auto: true });
+    await runAnalyze(".synapse", false);
+    await runBuildV2({ auto: true });
+
+    expect(charged()).toEqual([300]);
+  });
+
+  it("migrates a file with both old keys to their max, without re-charging", async () => {
+    fs.writeFileSync(
+      prevPath(),
+      JSON.stringify({ total_lines_analyzed: 1000, v2_lines_indexed: 998 }),
+    );
+
+    await runBuildV2({ auto: true });
+    await runAnalyze(".synapse", false);
+
+    expect(charged()).toEqual([]);
+    writeRepo(cwd, 1050);
+    await runBuildV2({ auto: true });
+    expect(charged()).toEqual([50]);
+    expect(JSON.parse(prevFile()!)).toEqual(baseline(1050));
   });
 });
 

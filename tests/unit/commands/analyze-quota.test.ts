@@ -52,6 +52,11 @@ let fetchMock: ReturnType<typeof vi.fn>;
 const saved = { ...process.env };
 
 const prevPath = () => path.join(cwd, ".synapse", "statistics.prev.json");
+const baseline = (n: number) => ({
+  lines_indexed: n,
+  total_lines_analyzed: n,
+  v2_lines_indexed: n,
+});
 const prevFile = () => (fs.existsSync(prevPath()) ? fs.readFileSync(prevPath(), "utf-8") : null);
 const analyzeEvents = () =>
   fetchMock.mock.calls
@@ -103,7 +108,7 @@ describe("synapse analyze: lines reporting (SYN-315)", () => {
     await runAnalyze(".synapse", false);
 
     expect(analyzeEvents().map((e) => e.lines_count)).toEqual([1000]);
-    expect(JSON.parse(prevFile()!)).toEqual({ total_lines_analyzed: 1000 });
+    expect(JSON.parse(prevFile()!)).toEqual(baseline(1000));
   });
 
   it("leaves statistics.prev.json unchanged after a 500 and resends next run", async () => {
@@ -119,7 +124,7 @@ describe("synapse analyze: lines reporting (SYN-315)", () => {
     fetchMock.mockClear();
     await runAnalyze(".synapse", false);
     expect(analyzeEvents().map((e) => e.lines_count)).toEqual([600]);
-    expect(JSON.parse(prevFile()!)).toEqual({ total_lines_analyzed: 1000 });
+    expect(JSON.parse(prevFile()!)).toEqual(baseline(1000));
   });
 
   it("shows the quota box on a 429 and keeps the baseline", async () => {
@@ -132,11 +137,32 @@ describe("synapse analyze: lines reporting (SYN-315)", () => {
     expect(prevFile()).toBeNull();
   });
 
-  it("keeps the v2 baseline when it writes its own", async () => {
-    fs.writeFileSync(prevPath(), JSON.stringify({ v2_lines_indexed: 77 }));
+  it("charges nothing for lines a build already reported", async () => {
+    fs.writeFileSync(prevPath(), JSON.stringify({ v2_lines_indexed: 1000 }));
 
     await runAnalyze(".synapse", false);
 
-    expect(JSON.parse(prevFile()!)).toEqual({ v2_lines_indexed: 77, total_lines_analyzed: 1000 });
+    expect(analyzeEvents()).toHaveLength(0);
+  });
+
+  it("charges only the lines above a build's baseline, then raises the shared one", async () => {
+    fs.writeFileSync(prevPath(), JSON.stringify({ v2_lines_indexed: 900 }));
+
+    await runAnalyze(".synapse", false);
+
+    expect(analyzeEvents().map((e) => e.lines_count)).toEqual([100]);
+    expect(JSON.parse(prevFile()!)).toEqual(baseline(1000));
+  });
+
+  it("never lowers the baseline when the analyzed total shrinks", async () => {
+    fs.writeFileSync(prevPath(), JSON.stringify(baseline(1000)));
+    analyzer.totalLines = 600;
+
+    await runAnalyze(".synapse", false);
+    analyzer.totalLines = 1000;
+    await runAnalyze(".synapse", false);
+
+    expect(analyzeEvents()).toHaveLength(0);
+    expect(JSON.parse(prevFile()!)).toEqual(baseline(1000));
   });
 });
