@@ -80,6 +80,8 @@ export interface BuildV2Options {
   allEndpoints?: boolean;
   /** Auto: comma-separated endpoints to expose ("GET /x", "/x" or tool names). */
   endpoints?: string;
+  /** Auto (hosted): create a new server instead of updating this repo's one. */
+  newServer?: boolean;
 }
 
 function parseMaxTimeMs(opts: BuildV2Options): number {
@@ -409,6 +411,7 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
         smartNames: opts.smartNames,
         selection,
         report: ctx.report,
+        newServer: opts.newServer,
       });
     } else {
       await runCustomFlow({

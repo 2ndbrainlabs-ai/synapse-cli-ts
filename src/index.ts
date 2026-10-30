@@ -120,7 +120,15 @@ program
   .option("--auto", "v2: force Auto track (expose HTTP endpoints via runner)")
   .option("--custom", "v2: force Custom track (compose internal functions)")
   .option("--base-url <url>", "v2 auto: deployed base URL for the API")
-  .option("--server-name <name>", "v2 auto: name for the created MCP server")
+  .option(
+    "--server-name <name>",
+    "v2 auto: MCP server name (default: folder name). Rebuilds update the server with this name; " +
+      "a different name gives the repo a second server",
+  )
+  .option(
+    "--new",
+    "v2 auto: create a new MCP server instead of updating this repo's existing one (new server id)",
+  )
   .option(
     "--all-endpoints",
     "v2 auto: expose every detected endpoint without the picker (implies --auto; for CI / no TTY)",
@@ -168,6 +176,7 @@ program
         query: opts.query,
         baseUrl: opts.baseUrl,
         serverName: opts.serverName,
+        newServer: opts.new ?? false,
         allEndpoints: opts.allEndpoints ?? false,
         endpoints: opts.endpoints,
         smartNames: opts.smartNames ?? false,
