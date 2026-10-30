@@ -409,7 +409,10 @@ Use `--global` to apply any of this to `~/.synapse` instead of the current proje
 | `synapse build --auto [--server-name <name>] [--new]` | Rebuilds update the project's existing MCP server (same server id). `--new` creates another server; `--server-name` picks which one. |
 | `synapse build --engine v1 [-q <query>] [-o <file>] [--no-validate] [--no-docs] [-g]` | Legacy v1 engine (hosted, Python only). Needs `synapse analyze` first. |
 | `synapse analyze [-o <dir>] [-v]` | Scan Python code and write the symbol/schema map the v1 engine uses. |
-| `synapse config [--update] [--key <k>] [--global]` | View or update config. |
+| `synapse config` | Show settings: the API key in use (redacted) and where it comes from, saved keys, project, endpoints and the local-build provider. |
+| `synapse config set-key [<key>] [--global]` | Check a Synapse API key with the backend, then save it encrypted. Prompts when `<key>` is omitted. `--key <k>` and `--update` are aliases. |
+| `synapse config keys` | List the active API keys on your account. |
+| `synapse config revoke <id> [--yes]` | Revoke an API key on your account. |
 | `synapse model` | Show the inference provider local builds use. |
 | `synapse model list` | List supported providers and their default models. |
 | `synapse model set <provider> [--model <id>] [--base-url <url>] [--save-key <k>] [--global]` | Switch provider for local builds. |
@@ -429,6 +432,13 @@ Config is resolved in this order:
 3. Global `~/.synapse/config.json`
 
 This covers the hosted service.
+
+### Synapse API key
+
+- `synapse config set-key` checks the key with the backend before saving it. A key the backend rejects is not saved, and your current key stays. If the backend can't be reached, the key is saved with a warning. Run it without `<key>` to type the key at a masked prompt, which keeps it out of your shell history.
+- The key is always saved to `~/.synapse`. If the current project already has its own saved key, that one is replaced too, because it would otherwise take precedence. `--global` saves to `~/.synapse` only. Nothing is created in a directory that isn't a Synapse project.
+- `SYNAPSE_API_KEY` overrides every saved key. `synapse config` names the source in use and warns you when the environment variable is set.
+- To rotate a key: create a new one in the console, run `synapse config set-key`, then `synapse config keys` and `synapse config revoke <old id>`. Revoking needs confirmation. If you revoke the key the CLI is using, it warns you, and every later command fails until you save a new key. A revoked key is rejected by the API at once and by the build backend within about 30 seconds.
 
 ### Default endpoints
 
@@ -485,7 +495,7 @@ Hosted Auto mode writes no file for any language: the hosted runner serves the t
 | `Not Initialized` on `build` | Run `synapse init` |
 | `Analysis Required` (with `--engine v1`) | Run `synapse analyze` |
 | `Quota Exceeded` | Check `synapse info`. The free tier allows 10 MCP servers and 100,000 indexed lines. |
-| `Your Synapse API key is invalid or expired` `[AUTH_INVALID]` | Save a valid key with `synapse config --key <KEY>`, or set `SYNAPSE_API_KEY` (it overrides saved keys). |
+| `Your Synapse API key is invalid or expired` `[AUTH_INVALID]` | Save a valid key with `synapse config set-key`, or set `SYNAPSE_API_KEY` (it overrides saved keys). |
 | `Endpoint Selection Required` | No terminal to pick endpoints in. Pass `--all-endpoints` or `--endpoints <list>`. |
 | `The Synapse server hit an internal error` `[SERVER_ERROR]` | A server-side problem, not your code or key. Report it with the `Session:` id. |
 | Backend error mid-build | The CLI retries transient errors. Quote the `Session:` id when opening an issue. |

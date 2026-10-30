@@ -159,7 +159,7 @@ async function checkApiKey(
           `${t.cmd("SYNAPSE_API_KEY")} overrides saved keys. Set it to a valid key,`,
           "or unset it to use a saved one.",
         ]
-      : [`Save a valid key with ${t.cmd("synapse config --key <KEY>")}, or set ${t.cmd("SYNAPSE_API_KEY")}.`];
+      : [`Save a valid key with ${t.cmd("synapse config set-key")}, or set ${t.cmd("SYNAPSE_API_KEY")}.`];
   roundedBox("API Key Rejected", "⚠", t.warn, [
     `Synapse rejected the API key ${from}.`,
     "It may be invalid, expired or revoked — builds will fail until it's replaced.",

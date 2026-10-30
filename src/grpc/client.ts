@@ -256,7 +256,7 @@ export class SynapseClient {
       return {
         candidates: [],
         error:
-          "Missing API key. Set one with: synapse init, synapse config --key <KEY>, " +
+          "Missing API key. Set one with: synapse init, synapse config set-key, " +
           "or set SYNAPSE_API_KEY in the environment.",
       };
     }
@@ -529,7 +529,7 @@ export class SynapseClient {
       return {
         success: false,
         error:
-          "Missing API key. Set one with: synapse init, synapse config --key <KEY>, " +
+          "Missing API key. Set one with: synapse init, synapse config set-key, " +
           "or set SYNAPSE_API_KEY in the environment.",
         sessionId,
       };
