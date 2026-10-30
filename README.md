@@ -449,7 +449,7 @@ This covers the hosted service.
 | Hosted MCP servers | `https://mcp.synapse.2ndbrainlabs.ai` | — |
 | Console | `https://synapse.2ndbrainlabs.ai` | — |
 
-Since 0.1.7 these replace the earlier `*.synaps3.ai` hostnames. The old hostnames keep serving for now, so a `SYNAPSE_BACKEND_URL` / `SYNAPSE_API_URL` that still points at them keeps working; switch to the new names when convenient.
+Since 0.1.6 these replace the earlier `*.synaps3.ai` hostnames. The old hostnames keep serving for now, so a `SYNAPSE_BACKEND_URL` / `SYNAPSE_API_URL` that still points at them keeps working; switch to the new names when convenient.
 
 The inference provider used by `--local` builds is configured separately — see [Config schema](#config-schema) and [Providing your API key](#providing-your-api-key).
 

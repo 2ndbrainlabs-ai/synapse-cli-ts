@@ -40,7 +40,7 @@ function isQuotaAccountingEvent(
  * True when a /telemetry/cli response means the lines-indexed quota is used
  * up. ui-backend (routers/telemetry.py) answers 429 for two reasons and sends
  * no structured code, only `detail`:
- *   - quota:      "Lines analyzed quota exceeded. Contact synaps3.ai for extended limits."
+ *   - quota:      "Lines analyzed quota exceeded. Contact <support> for extended limits."
  *   - rate limit: "Rate limit exceeded"
  * Only a 429 whose detail mentions the quota blocks. A rate limit, or a 429
  * with no readable detail (e.g. from a proxy or load balancer), is treated as
