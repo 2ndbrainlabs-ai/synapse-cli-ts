@@ -1,7 +1,7 @@
 /**
  * Startup banner + welcome box.
  *
- * SYNAPS3 ASCII logo — white letters with a terracotta-tinted `3` for warmth,
+ * SYNAPSE ASCII logo — white letters with a terracotta-tinted final `E` for warmth,
  * routed through the theme's brand color to match the rest of the UI.
  */
 
@@ -11,25 +11,25 @@ import { BOX } from "./icons.js";
 
 // ASCII logo — kept as-is for brand recognition, colors routed through `t`.
 const LOGO_LINES = [
-  "███████╗██╗   ██╗███╗   ██╗ █████╗ ██████╗ ███████╗██████╗ ",
-  "██╔════╝╚██╗ ██╔╝████╗  ██║██╔══██╗██╔══██╗██╔════╝╚════██╗",
-  "███████╗ ╚████╔╝ ██╔██╗ ██║███████║██████╔╝███████╗ █████╔╝",
-  "╚════██║  ╚██╔╝  ██║╚██╗██║██╔══██║██╔═══╝ ╚════██║╚════██╗",
-  "███████║   ██║   ██║ ╚████║██║  ██║██║     ███████║██████╔╝",
-  "╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝     ╚══════╝╚═════╝ ",
+  "███████╗██╗   ██╗███╗   ██╗ █████╗ ██████╗ ███████╗███████╗",
+  "██╔════╝╚██╗ ██╔╝████╗  ██║██╔══██╗██╔══██╗██╔════╝██╔════╝",
+  "███████╗ ╚████╔╝ ██╔██╗ ██║███████║██████╔╝███████╗█████╗  ",
+  "╚════██║  ╚██╔╝  ██║╚██╗██║██╔══██║██╔═══╝ ╚════██║██╔══╝  ",
+  "███████║   ██║   ██║ ╚████║██║  ██║██║     ███████║███████╗",
+  "╚══════╝   ╚═╝   ╚═╝  ╚═══╝╚═╝  ╚═╝╚═╝     ╚══════╝╚══════╝",
 ];
 
 /**
- * Show the SYNAPS3 logo + tagline. Called only by `init` (Python parity).
+ * Show the SYNAPSE logo + tagline. Called only by `init` (Python parity).
  */
 export function displayBanner(): void {
   console.log();
-  // Split each line: main body white/text, last 8-9 chars (the "3") in brand
+  // Split each line: main body white/text, last 8 chars (the final "E") in brand
   for (const line of LOGO_LINES) {
     const cut = line.length - 8;
     const main = line.slice(0, cut);
-    const three = line.slice(cut);
-    console.log(` ${t.text(main)}${t.brand(three)}`);
+    const tail = line.slice(cut);
+    console.log(` ${t.text(main)}${t.brand(tail)}`);
   }
   console.log(`  ${t.dim("Agentic MCP Server Generator")}`);
   console.log();
