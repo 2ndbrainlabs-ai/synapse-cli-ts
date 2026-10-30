@@ -125,7 +125,7 @@ async function runHostedInit(workingDir: string, synapseDir: string): Promise<vo
     /* optional */
   }
 
-  displayWelcome(["synapse analyze", "synapse build", "synapse info"]);
+  displayWelcome(["synapse build", "synapse info"]);
 }
 
 /**

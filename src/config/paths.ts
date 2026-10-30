@@ -12,14 +12,6 @@ export function getProjectConfigPath(workingDir: string): string {
   return path.join(getProjectSynapseDir(workingDir), "config.json");
 }
 
-export function getProjectSchemaPath(workingDir: string): string {
-  return path.join(getProjectSynapseDir(workingDir), "project_schema.txt");
-}
-
-export function getStatisticsPath(workingDir: string): string {
-  return path.join(getProjectSynapseDir(workingDir), "statistics.json");
-}
-
 export function getIndexMetadataPath(workingDir: string): string {
   return path.join(getProjectSynapseDir(workingDir), "index_metadata.json");
 }
@@ -32,6 +24,3 @@ export function getVectorStorePath(workingDir: string): string {
   return path.join(getProjectSynapseDir(workingDir), "code_context.lance");
 }
 
-export function getContextMdPath(workingDir: string): string {
-  return path.join(getProjectSynapseDir(workingDir), "CONTEXT.md");
-}

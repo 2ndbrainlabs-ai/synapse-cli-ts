@@ -1,22 +1,20 @@
 // src/commands/shared/lines-delta.ts
 //
-// Lines-indexed quota accounting shared by `synapse analyze` (v1) and the v2
-// hosted build (SYN-315).
+// Lines-indexed quota accounting for v2 hosted builds (SYN-315).
 //
-// Both commands share ONE high-water baseline per repo, so the same lines are
-// never charged twice: `synapse analyze` followed by a hosted build (or the
-// reverse) on unchanged code charges the second run nothing. Each run sends
-// only the lines above the baseline as an `analyze` event, and raises the
+// Every hosted build of a repo shares ONE high-water baseline, so the same
+// lines are never charged twice: a rebuild on unchanged code charges nothing.
+// Each run sends only the lines above the baseline as an `analyze` event
+// (the event name the server's quota accounting uses), and raises the
 // baseline ONLY when the server accepted the event. A failed send (timeout,
 // 401, 500, 429) leaves the baseline alone, so the same lines are sent again
-// next run. The baseline never goes down: the engines scan slightly different
-// file sets (analyze: every supported file; v2: the files its prefilter hands
-// to the parser), and a lowering baseline would let them re-charge each
-// other's lines.
+// next run. The baseline never goes down, so a smaller scan (files deleted,
+// a different prefilter) can't make later runs re-charge lines.
 //
 // File format: a flat JSON object in `.synapse/statistics.prev.json`. The
 // shared key is `lines_indexed`. Older CLIs wrote `total_lines_analyzed`
-// (analyze) and `v2_lines_indexed` (v2 build); they are still read (the
+// (`synapse analyze`, removed with the v1 engine in SYN-257) and
+// `v2_lines_indexed` (v2 build); they are still read (the
 // baseline is the max of all three) and are kept equal to `lines_indexed` on
 // write, so downgrading to an older CLI does not re-charge either.
 
