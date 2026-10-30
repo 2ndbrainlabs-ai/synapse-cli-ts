@@ -8,6 +8,7 @@ By participating in this project you agree to abide by our [Code of Conduct](./C
 
 ## Ways to contribute
 
+- **Report a security vulnerability** — do not open a public issue; follow [SECURITY.md](./SECURITY.md).
 - **Report a bug** — open an issue with the `bug` label. Include the CLI version (`synapse --version`), your OS, and the `Session:` id printed on failure.
 - **Request a feature** — open an issue with the `enhancement` label describing the use case first, not the implementation.
 - **Fix an issue** — look for issues tagged `good first issue` or `help wanted`.
@@ -23,13 +24,17 @@ By participating in this project you agree to abide by our [Code of Conduct](./C
 
 ## Development setup
 
+Requires **Node.js 20+** (CI tests Node 20, 22 and 24) and npm. `.npmrc` sets `legacy-peer-deps`, so plain npm commands work.
+
 ```bash
 git clone https://github.com/2ndbrainlabs-ai/synapse-cli-ts.git
-cd synapse-cli
-npm install
+cd synapse-cli-ts
+npm ci
 npm run build
 npm test
 ```
+
+Editor settings (2-space indent, LF, UTF-8, final newline) are in `.editorconfig`; most editors pick it up automatically.
 
 Run the CLI against source instead of the compiled bundle:
 
@@ -48,9 +53,7 @@ Point the CLI at a local backend on `localhost:50051` with the `--dev` flag or `
 5. **Pass CI locally** before pushing:
 
    ```bash
-   npm run lint
-   npm run typecheck
-   npm test
+   npm run ci   # lint, typecheck (src + tests), unit tests, build
    ```
 
 6. **Write clear commit messages** — imperative mood, subject line under 72 chars, body explaining *why* not *what*.

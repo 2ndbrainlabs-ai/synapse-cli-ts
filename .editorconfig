@@ -1,0 +1,18 @@
+# https://editorconfig.org
+root = true
+
+[*]
+indent_style = space
+indent_size = 2
+end_of_line = lf
+charset = utf-8
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.md]
+# Trailing double spaces are significant line breaks in Markdown.
+trim_trailing_whitespace = false
+
+[*.go]
+# gofmt style (tests/fixtures/multi-lang-apis/go).
+indent_style = tab
