@@ -281,19 +281,54 @@ modelCmd
     runModelReset({ globalScope: opts.global ?? false });
   });
 
-program
+// `synapse config` — bare invocation shows settings (keys redacted);
+// subcommands change the API key and manage the account's keys.
+const configCmd = program
   .command("config")
-  .description("View or update Synapse configuration")
-  .option("--update", "Update configuration interactively")
-  .option("--key <apiKey>", "Set API key")
-  .option("--global", "Apply --key to global config (~/.synapse)")
+  .description("Show settings, or change and revoke Synapse API keys")
+  .option("--key <apiKey>", "Same as `synapse config set-key <apiKey>`")
+  .option("--update", "Same as `synapse config set-key` (prompts for the key)")
+  .option("--global", "With --key/--update: save to ~/.synapse only")
   .action(async (opts) => {
-    const { runConfig } = await import("./commands/config.js");
-    await runConfig({
-      update: opts.update ?? false,
-      apiKey: opts.key,
-      globalScope: opts.global ?? false,
-    });
+    const cfg = await import("./commands/config.js");
+    if (opts.key !== undefined || opts.update) {
+      await cfg.runConfigSetKey({ key: opts.key, globalScope: opts.global ?? false });
+    } else {
+      cfg.runConfigShow();
+    }
+  });
+
+configCmd
+  .command("set-key [apiKey]")
+  .description(
+    "Verify a Synapse API key and save it (prompts when omitted, which keeps it out of shell history)",
+  )
+  .option("--global", "Save to ~/.synapse only, leaving this project's saved key alone")
+  .action(async (apiKey: string | undefined, opts, cmd) => {
+    const { runConfigSetKey } = await import("./commands/config.js");
+    // --global may be parsed by the parent `config` command.
+    const all = cmd.optsWithGlobals();
+    await runConfigSetKey({ key: apiKey, globalScope: Boolean(opts.global ?? all.global) });
+  });
+
+configCmd
+  .command("keys")
+  .description("List the active API keys on your Synapse account")
+  .action(async () => {
+    const { runConfigKeys } = await import("./commands/config.js");
+    await runConfigKeys();
+  });
+
+configCmd
+  .command("revoke <keyId>")
+  .description("Revoke an API key on your account (ids from `synapse config keys`)")
+  .option("-y, --yes", "Don't ask for confirmation")
+  .action(async (keyId: string, opts, cmd) => {
+    const { runConfigRevoke } = await import("./commands/config.js");
+    // The program-level -y/--yes usually claims the flag; on revoke it is
+    // the confirmation.
+    const yes = Boolean(opts.yes ?? cmd.optsWithGlobals().yes);
+    await runConfigRevoke(keyId, { yes });
   });
 
 program

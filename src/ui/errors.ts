@@ -143,7 +143,7 @@ export function authInvalidError(technical = "", keySource?: ClassifyOpts["keySo
       ? "The key comes from SYNAPSE_API_KEY, which overrides saved keys. " +
         "Set it to a valid key, or unset it to use your saved key."
       : (keySource ? `The key comes from ${KEY_SOURCE_LABEL[keySource]}. ` : "") +
-        "Save a valid key with `synapse config --key <KEY>`, or export SYNAPSE_API_KEY.";
+        "Save a valid key with `synapse config set-key`, or export SYNAPSE_API_KEY.";
   return legacyError(
     ERROR_CODES.AUTH_INVALID,
     "Your Synapse API key is invalid or expired.",

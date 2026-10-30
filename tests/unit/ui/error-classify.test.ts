@@ -24,7 +24,7 @@ describe("classifyFailure: gRPC status strings", () => {
     const e = classifyFailure("gRPC error: 16: Invalid or expired API key");
     expect(e.error_code).toBe(ERROR_CODES.AUTH_INVALID);
     expect(e.user_message).toMatch(/API key is invalid or expired/);
-    expect(e.hint).toMatch(/synapse config --key/);
+    expect(e.hint).toMatch(/synapse config set-key/);
     expect(e.hint).toMatch(/SYNAPSE_API_KEY/);
     expect(e.technical).toBe("Invalid or expired API key");
   });
