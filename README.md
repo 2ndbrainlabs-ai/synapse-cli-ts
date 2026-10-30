@@ -33,7 +33,7 @@ The CLI scans your code **client-side**: language detection and route/function e
 npm install -g @2ndbrainlabs-ai/synapse-cli
 ```
 
-Requires **Node.js 18+**. Verify with `synapse --version`.
+Requires **Node.js 20+**. Verify with `synapse --version`.
 
 ## Quick start
 
