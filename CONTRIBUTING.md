@@ -16,10 +16,10 @@ By participating in this project you agree to abide by our [Code of Conduct](./C
 
 ## Where the code lives
 
-- `src/commands/` — CLI subcommands (`init`, `build`, `analyze`, `info`, ...).
+- `src/commands/` — CLI subcommands (`init`, `build`, `analyze`, `info`, ...). `build` is the v2 engine in `src/commands/v2/`.
 - `src/config/` — config resolution, encryption for the Synapse API key.
 - `src/extractors/` — deterministic tree-sitter surface extraction.
-- `src/grpc/` — hosted-mode client + tool executor.
+- `src/grpc/` — hosted-mode gRPC client, quota and telemetry.
 - **`src/backend/`** — **in-process codegen pipeline for `--local` mode. Most improvements to prompts, schemas, templates, and the smoke verifier live here.**
 
 ## Development setup
