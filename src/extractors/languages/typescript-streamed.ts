@@ -33,6 +33,16 @@ export async function extractTypescriptSurfaceStreamed(opts: {
     if (cached && cached.sha === match.sha) {
       endpoints.push(...cached.endpoints);
       if (captureFns) functions.push(...cached.functions);
+      // Unchanged files still count toward the repo total (SYN-315), the same
+      // way python-streamed does, so a rescan that reuses them reports the
+      // same lines_scanned as a fresh scan.
+      try {
+        linesScanned += countLines(
+          match.fullHashed ? match.head.toString("utf-8") : await fs.readFile(match.path, "utf-8"),
+        );
+      } catch {
+        /* unreadable now: leave it out of the count */
+      }
       continue;
     }
     try {

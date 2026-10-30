@@ -10,6 +10,12 @@
 //   - `--resume` picks the most recent unfinished ledger for this repo and
 //     replays its SHA cache, so we re-parse only files whose bytes changed
 //
+// Discovery cache (SYN-8): the first build in a repo discovers and saves the
+// result to `.synapse/surface_cache.json`. Later builds reuse it without
+// scanning and print when it was discovered; `--discover` rescans (re-parsing
+// only files whose bytes changed) and refreshes it. `--resume` wins over the
+// cache: it finishes the unfinished session's scan, then refreshes the cache.
+//
 // Exit status (SYN-314): every failed, aborted or paused build exits non-zero.
 // Flows throw BuildFailure after showing the error; runBuildV2 sets
 // process.exitCode and sends one `build` telemetry event with the outcome.
@@ -51,7 +57,10 @@ import {
   buildSurfaceCache,
   cacheToManifest,
   cacheToResumeScanned,
+  formatDiscoveredAt,
+  isCacheUsable,
   readSurfaceCache,
+  surfaceCacheKey,
   writeSurfaceCache,
 } from "../../session/surface-cache.js";
 
@@ -245,7 +254,8 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
 
   const repoHash = computeRepoHash(workingDir);
   const maxTimeMs = parseMaxTimeMs(opts);
-  const surfaceCache = readSurfaceCache(workingDir, repoHash);
+  const cacheKey = surfaceCacheKey(workingDir);
+  const surfaceCache = readSurfaceCache(workingDir, cacheKey);
 
   // ---------------------------------------------------------------------------
   // Resume attempt — pick the most recent unfinished session for this repo.
@@ -314,21 +324,32 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
     resumeFrom: resumeState,
   });
 
+  // Precedence: --resume (finish the unfinished scan) > --discover (rescan)
+  // > a usable cache (reuse, no scan) > first-time discovery.
   const captureFunctions = mode === "custom";
   const cacheCompatible = !!surfaceCache && (!captureFunctions || surfaceCache.captured_functions);
-  const skipDiscovery = !opts.resume && cacheCompatible && !opts.discover;
+  const skipDiscovery =
+    !opts.resume && !opts.discover && isCacheUsable(surfaceCache, captureFunctions);
 
   let manifest: SurfaceManifest;
 
   if (skipDiscovery) {
     // Fast path: reuse the last completed discovery result untouched — no
     // prefilter scan, no parsing. Pass --discover to force a re-scan.
-    manifest = cacheToManifest(surfaceCache!);
+    // Source changes since then are not picked up (that would need the scan
+    // this skips); the hint tells the user how to rescan.
+    manifest = cacheToManifest(surfaceCache!, { captureFunctions });
+    // Close the session right away: nothing to resume, and an open ledger
+    // would show up as "resumable" on the next build.
+    session.markDone(manifest.endpoints.length, manifest.functions.length);
     stepOk("Session", sessionId);
+    const found = captureFunctions
+      ? `${manifest.endpoints.length} endpoint(s), ${manifest.functions.length} function(s)`
+      : `${manifest.endpoints.length} endpoint(s)`;
     stepInfo(
       "Discover",
-      `Reusing cached discovery — ${manifest.endpoints.length} endpoint(s), ` +
-        `${manifest.functions.length} function(s). Pass ${t.cmd("--discover")} to re-scan for changes.`,
+      `Using the endpoints discovered on ${formatDiscoveredAt(surfaceCache!.updated_at)} (${found}). ` +
+        `Run ${t.cmd("synapse build --discover")} to rescan.`,
     );
     stepInfo(
       "Language",
@@ -396,6 +417,11 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
     }
 
     manifest = extracted;
+    // Framework comes from parse hits; if every file was unchanged and
+    // replayed from the cache, nothing was parsed, so keep the cached one.
+    if (!manifest.framework && cacheCompatible && !opts.resume) {
+      manifest.framework = surfaceCache!.framework;
+    }
 
     spinner.complete(
       `Extracted ${manifest.endpoints.length} endpoint(s) and ${manifest.functions.length} function(s)`,
@@ -410,7 +436,7 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
     // Persist the discovery result so future `synapse build` runs can skip
     // this step entirely until `--discover` is passed again.
     const nextCache = buildSurfaceCache({
-      repoHash,
+      repoHash: cacheKey,
       manifest,
       ledgerRecords: readLedger(workingDir, sessionId),
       previous: surfaceCache,
@@ -427,6 +453,10 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
   // code generation, so a 429 stops the build. Other failures (401, 5xx,
   // timeout) fail open: the build continues and the same lines are resent
   // next time because the baseline only moves on success (SYN-315).
+  // A reused discovery cache carries the lines_scanned of the scan that made
+  // it, so a reuse normally sends nothing (delta 0). It only sends when that
+  // scan's lines were never accepted (failed send or quota block), so a
+  // rebuild can't skip the quota by reusing the cache.
   // ---------------------------------------------------------------------------
   if (effectiveMode === "hosted") {
     let report: LinesReport | undefined;

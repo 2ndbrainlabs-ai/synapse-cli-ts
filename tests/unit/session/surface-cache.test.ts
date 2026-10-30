@@ -12,7 +12,9 @@ import {
   buildSurfaceCache,
   cacheToManifest,
   cacheToResumeScanned,
+  isCacheUsable,
   readSurfaceCache,
+  SURFACE_CACHE_VERSION,
   writeSurfaceCache,
   type SurfaceCacheFile,
 } from "../../../src/session/surface-cache.js";
@@ -68,6 +70,7 @@ describe("surface-cache", () => {
 
   it("round-trips a written cache", () => {
     const cache: SurfaceCacheFile = {
+      version: SURFACE_CACHE_VERSION,
       repo_hash: "repo123",
       language: "python",
       framework: "fastapi",
@@ -76,6 +79,7 @@ describe("surface-cache", () => {
       files: {
         "app/routes.py": { sha: "abc", endpoints: [endpoint()], functions: [] },
       },
+      lines_scanned: 100,
       updated_at: 1000,
     };
     writeSurfaceCache(workingDir, cache);
@@ -85,12 +89,14 @@ describe("surface-cache", () => {
 
   it("invalidates the cache when repo_hash doesn't match", () => {
     const cache: SurfaceCacheFile = {
+      version: SURFACE_CACHE_VERSION,
       repo_hash: "repo123",
       language: "python",
       framework: null,
       package_import_root: "app",
       captured_functions: false,
       files: {},
+      lines_scanned: 100,
       updated_at: 1000,
     };
     writeSurfaceCache(workingDir, cache);
@@ -106,6 +112,7 @@ describe("surface-cache", () => {
 
   it("cacheToManifest flattens all file entries into one manifest", () => {
     const cache: SurfaceCacheFile = {
+      version: SURFACE_CACHE_VERSION,
       repo_hash: "repo123",
       language: "python",
       framework: "flask",
@@ -115,6 +122,7 @@ describe("surface-cache", () => {
         "a.py": { sha: "sha-a", endpoints: [endpoint({ path: "/a" })], functions: [fn({ qualname: "a_fn" })] },
         "b.py": { sha: "sha-b", endpoints: [endpoint({ path: "/b" })], functions: [] },
       },
+      lines_scanned: 100,
       updated_at: 1000,
     };
     const manifest = cacheToManifest(cache);
@@ -126,6 +134,7 @@ describe("surface-cache", () => {
 
   it("cacheToResumeScanned reshapes files into file_scanned-like records keyed by path", () => {
     const cache: SurfaceCacheFile = {
+      version: SURFACE_CACHE_VERSION,
       repo_hash: "repo123",
       language: "python",
       framework: null,
@@ -134,6 +143,7 @@ describe("surface-cache", () => {
       files: {
         "a.py": { sha: "sha-a", endpoints: [endpoint()], functions: [fn()] },
       },
+      lines_scanned: 100,
       updated_at: 5000,
     };
     const scanned = cacheToResumeScanned(cache);
@@ -147,6 +157,7 @@ describe("surface-cache", () => {
 
   it("buildSurfaceCache carries over unchanged files and applies fresh ledger scans", () => {
     const previous: SurfaceCacheFile = {
+      version: SURFACE_CACHE_VERSION,
       repo_hash: "repo123",
       language: "python",
       framework: "fastapi",
@@ -156,6 +167,7 @@ describe("surface-cache", () => {
         "unchanged.py": { sha: "sha-unchanged", endpoints: [endpoint({ path: "/unchanged" })], functions: [] },
         "changed.py": { sha: "old-sha", endpoints: [endpoint({ path: "/old" })], functions: [] },
       },
+      lines_scanned: 100,
       updated_at: 1000,
     };
 
@@ -176,9 +188,13 @@ describe("surface-cache", () => {
       manifest: {
         language: "python",
         framework: "fastapi",
-        endpoints: [],
+        endpoints: [
+          endpoint({ path: "/unchanged", file_path: "unchanged.py" }),
+          endpoint({ path: "/new", file_path: "changed.py" }),
+        ],
         functions: [],
         package_import_root: "app",
+        lines_scanned: 42,
       },
       ledgerRecords,
       previous,
@@ -190,6 +206,8 @@ describe("surface-cache", () => {
     expect(next.files["changed.py"].endpoints[0].path).toBe("/new");
     expect(next.repo_hash).toBe("repo123");
     expect(next.captured_functions).toBe(false);
+    expect(next.lines_scanned).toBe(42);
+    expect(next.version).toBe(SURFACE_CACHE_VERSION);
   });
 
   it("buildSurfaceCache works with no previous cache (first-ever discovery)", () => {
@@ -219,5 +237,87 @@ describe("surface-cache", () => {
     });
     expect(Object.keys(next.files)).toEqual(["a.py"]);
     expect(next.captured_functions).toBe(true);
+  });
+
+  function cacheWith(overrides: Partial<SurfaceCacheFile> = {}): SurfaceCacheFile {
+    return {
+      version: SURFACE_CACHE_VERSION,
+      repo_hash: "repo123",
+      language: "python",
+      framework: "fastapi",
+      package_import_root: "app",
+      captured_functions: true,
+      files: {
+        "a.py": { sha: "sha-a", endpoints: [endpoint({ file_path: "a.py" })], functions: [fn({ file_path: "a.py" })] },
+      },
+      lines_scanned: 100,
+      updated_at: 1000,
+      ...overrides,
+    };
+  }
+
+  function writeRaw(contents: string): void {
+    fs.mkdirSync(path.join(workingDir, ".synapse"), { recursive: true });
+    fs.writeFileSync(path.join(workingDir, ".synapse", "surface_cache.json"), contents, "utf-8");
+  }
+
+  it("ignores a cache from an older format (no version / lines_scanned)", () => {
+    const { version: _v, lines_scanned: _l, ...old } = cacheWith();
+    writeRaw(JSON.stringify(old));
+    expect(readSurfaceCache(workingDir, "repo123")).toBeNull();
+  });
+
+  it("ignores valid JSON with the wrong shape instead of crashing later", () => {
+    writeRaw(JSON.stringify(cacheWith({ files: { "a.py": { sha: 1 } } as never })));
+    expect(readSurfaceCache(workingDir, "repo123")).toBeNull();
+    writeRaw("null");
+    expect(readSurfaceCache(workingDir, "repo123")).toBeNull();
+    writeRaw("[]");
+    expect(readSurfaceCache(workingDir, "repo123")).toBeNull();
+  });
+
+  it("cacheToManifest drops functions for Auto and carries lines_scanned", () => {
+    const manifest = cacheToManifest(cacheWith(), { captureFunctions: false });
+    expect(manifest.endpoints).toHaveLength(1);
+    expect(manifest.functions).toEqual([]);
+    expect(manifest.lines_scanned).toBe(100);
+  });
+
+  it("isCacheUsable: needs function data for Custom and something to reuse", () => {
+    expect(isCacheUsable(null, false)).toBe(false);
+    expect(isCacheUsable(cacheWith(), false)).toBe(true);
+    expect(isCacheUsable(cacheWith(), true)).toBe(true);
+    expect(isCacheUsable(cacheWith({ captured_functions: false }), true)).toBe(false);
+    expect(isCacheUsable(cacheWith({ files: {} }), false)).toBe(false);
+    const fnOnly = cacheWith({
+      files: { "a.py": { sha: "s", endpoints: [], functions: [fn()] } },
+    });
+    expect(isCacheUsable(fnOnly, false)).toBe(false);
+    expect(isCacheUsable(fnOnly, true)).toBe(true);
+  });
+
+  it("buildSurfaceCache drops files that the new scan no longer found", () => {
+    const previous = cacheWith({
+      files: {
+        "kept.py": { sha: "k", endpoints: [endpoint({ file_path: "kept.py" })], functions: [] },
+        "deleted.py": { sha: "d", endpoints: [endpoint({ file_path: "deleted.py" })], functions: [] },
+      },
+    });
+    const next = buildSurfaceCache({
+      repoHash: "repo123",
+      manifest: {
+        language: "python",
+        framework: null,
+        endpoints: [endpoint({ file_path: "kept.py" })],
+        functions: [],
+        package_import_root: "app",
+      },
+      ledgerRecords: [],
+      previous,
+      captureFunctions: false,
+    });
+    expect(Object.keys(next.files)).toEqual(["kept.py"]);
+    // Nothing was parsed, so the framework from the last scan is kept.
+    expect(next.framework).toBe("fastapi");
   });
 });
