@@ -53,6 +53,10 @@ export interface BuildReport {
   toolCount: number;
   /** Candidates the build chose from (detected endpoints or functions). */
   candidateCount: number;
+  /** Hosted auto: the MCP server this build published to (SYN-285). */
+  serverId?: string;
+  /** Hosted auto: whether that server was created, updated or recreated. */
+  serverAction?: "created" | "updated" | "recreated";
 }
 
 /** Map a ui-backend (REST) failure to an accurate cause. */

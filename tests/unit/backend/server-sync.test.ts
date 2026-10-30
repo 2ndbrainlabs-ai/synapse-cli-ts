@@ -1,0 +1,353 @@
+// Stable MCP server id across hosted auto builds (SYN-285).
+//
+// `fetch` is replaced by a small in-memory ui-backend that implements the
+// routes the CLI uses, including the mcp_servers_count quota counter that
+// POST /mcp-servers increments and DELETE decrements.
+
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+
+import {
+  planEndpointSync,
+  publishServer,
+  readServerBinding,
+  ServerPublishError,
+} from "../../../src/backend/server-sync.js";
+import type { UiEndpoint, UiEndpointCreate } from "../../../src/backend/ui-client.js";
+
+const DEV = "https://api.dev.example.test";
+const PROD = "https://api.example.test";
+
+interface FakeServer {
+  id: string;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+}
+
+class FakeUiBackend {
+  servers = new Map<string, FakeServer>();
+  endpoints = new Map<string, UiEndpoint & { server_id: string }>();
+  mcpServersCount = 0;
+  calls: string[] = [];
+  private seq = 0;
+
+  private id(prefix: string): string {
+    this.seq += 1;
+    return `${prefix}-${String(this.seq).padStart(4, "0")}`;
+  }
+
+  deleteServer(id: string): void {
+    const s = this.servers.get(id);
+    if (s?.is_active) {
+      s.is_active = false;
+      this.mcpServersCount -= 1;
+    }
+  }
+
+  serverEndpoints(serverId: string) {
+    return [...this.endpoints.values()]
+      .filter((e) => e.server_id === serverId)
+      .sort((a, b) => a.display_order - b.display_order);
+  }
+
+  fetch = async (url: string | URL, init: RequestInit = {}): Promise<Response> => {
+    const u = new URL(String(url));
+    const method = (init.method ?? "GET").toUpperCase();
+    const body = init.body ? JSON.parse(String(init.body)) : undefined;
+    this.calls.push(`${method} ${u.pathname}`);
+    const json = (status: number, data: unknown) =>
+      new Response(JSON.stringify(data), { status });
+    const live = (id: string) => {
+      const s = this.servers.get(id);
+      return s && s.is_active ? s : undefined;
+    };
+
+    let m: RegExpMatchArray | null;
+    if (method === "POST" && u.pathname === "/mcp-servers") {
+      const s = { id: this.id("srv"), name: body.name, description: body.description, is_active: true };
+      this.servers.set(s.id, s);
+      this.mcpServersCount += 1;
+      return json(200, { server: s });
+    }
+    if ((m = u.pathname.match(/^\/mcp-servers\/([^/]+)$/))) {
+      const s = live(m[1]);
+      if (!s) return json(404, { detail: "Server not found or access denied" });
+      if (method === "PUT") {
+        s.name = body.name ?? s.name;
+        s.description = body.description ?? s.description;
+      }
+      return json(200, { server: s });
+    }
+    if ((m = u.pathname.match(/^\/mcp-servers\/([^/]+)\/endpoints(\/batch)?$/))) {
+      if (!live(m[1])) return json(404, { detail: "Server not found or access denied" });
+      if (method === "GET") return json(200, { endpoints: this.serverEndpoints(m[1]) });
+      const created = (body.endpoints as UiEndpointCreate[]).map((ep, i) => {
+        const e = {
+          ...ep,
+          id: this.id("ep"),
+          server_id: m![1],
+          headers: ep.headers ?? [],
+          payload: ep.payload ?? null,
+          display_order: ep.display_order ? ep.display_order : i,
+        };
+        this.endpoints.set(e.id, e);
+        return e;
+      });
+      return json(200, { endpoints: created });
+    }
+    if (method === "PUT" && (m = u.pathname.match(/^\/endpoints\/([^/]+)$/))) {
+      const e = this.endpoints.get(m[1]);
+      if (!e) return json(404, { detail: "Endpoint not found" });
+      for (const [k, v] of Object.entries(body)) if (v != null) (e as unknown as Record<string, unknown>)[k] = v;
+      return json(200, { endpoint: e });
+    }
+    if (method === "POST" && u.pathname === "/endpoints/batch-delete") {
+      const deleted = (body.endpoint_ids as string[]).filter((id) => this.endpoints.delete(id));
+      return json(200, { deleted, count: deleted.length });
+    }
+    return json(404, { detail: `no route ${method} ${u.pathname}` });
+  };
+}
+
+function ep(method: UiEndpointCreate["method"], p: string, extra: Partial<UiEndpointCreate> = {}): UiEndpointCreate {
+  return {
+    name: `${method} ${p}`,
+    description: `${method} ${p}`,
+    method,
+    url: `\${ENDPOINT_BASE_URL}${p}`,
+    headers: [],
+    payload: null,
+    ...extra,
+  };
+}
+
+const MEDTRACK = [
+  ep("GET", "/patients"),
+  ep("POST", "/patients", { payload: { name: "x" } }),
+  ep("GET", "/patients/{id}"),
+  ep("DELETE", "/patients/{id}"),
+];
+
+let cwd: string;
+let backend: FakeUiBackend;
+const saved = { ...process.env };
+
+function build(endpoints: UiEndpointCreate[], extra: Partial<Parameters<typeof publishServer>[0]> = {}) {
+  return publishServer({
+    workingDir: cwd,
+    serverName: "medtrack",
+    description: "Generated by Synapse from fastapi project",
+    endpoints,
+    ...extra,
+  });
+}
+
+beforeEach(() => {
+  cwd = fs.mkdtempSync(path.join(os.tmpdir(), "synapse-server-sync-"));
+  fs.mkdirSync(path.join(cwd, ".synapse"), { recursive: true });
+  fs.writeFileSync(path.join(cwd, ".synapse", "config.json"), JSON.stringify({ initialized: true }));
+  process.env.SYNAPSE_API_URL = DEV;
+  process.env.SYNAPSE_API_KEY = "syn_live_test_00000000000000000000";
+  backend = new FakeUiBackend();
+  vi.stubGlobal("fetch", vi.fn(backend.fetch));
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+  process.env = { ...saved };
+  fs.rmSync(cwd, { recursive: true, force: true });
+});
+
+describe("publishServer", () => {
+  it("first build creates a server and records it in .synapse/config.json", async () => {
+    const r = await build(MEDTRACK);
+    expect(r.action).toBe("created");
+    expect(backend.mcpServersCount).toBe(1);
+    expect(backend.serverEndpoints(r.serverId)).toHaveLength(4);
+    expect(readServerBinding(cwd, "medtrack")?.id).toBe(r.serverId);
+    const cfg = JSON.parse(fs.readFileSync(path.join(cwd, ".synapse", "config.json"), "utf-8"));
+    expect(cfg.initialized).toBe(true); // existing config kept
+    expect(cfg.hosted_servers[DEV].medtrack.id).toBe(r.serverId);
+  });
+
+  it("rebuild reuses the server id and does not consume quota", async () => {
+    const first = await build(MEDTRACK);
+    backend.calls = [];
+    const second = await build(MEDTRACK);
+
+    expect(second.serverId).toBe(first.serverId);
+    expect(second.action).toBe("updated");
+    expect(second).toMatchObject({ added: 0, updated: 0, removed: 0, unchanged: 4 });
+    expect(backend.mcpServersCount).toBe(1);
+    expect(backend.calls).not.toContain("POST /mcp-servers");
+    expect(backend.serverEndpoints(first.serverId)).toHaveLength(4);
+  });
+
+  it("a code change updates endpoints on the same server id", async () => {
+    const first = await build(MEDTRACK);
+    const before = new Map(backend.serverEndpoints(first.serverId).map((e) => [`${e.method} ${e.url}`, e.id]));
+
+    const changed = [
+      ep("GET", "/patients", { description: "List every patient" }), // changed
+      ep("POST", "/patients", { payload: { name: "x" } }), // same
+      ep("GET", "/patients/{id}"), // same
+      // DELETE /patients/{id} removed from the code
+      ep("GET", "/health"), // new
+    ];
+    const r = await build(changed);
+
+    expect(r.serverId).toBe(first.serverId);
+    expect(r).toMatchObject({ action: "updated", added: 1, updated: 1, removed: 1, unchanged: 2 });
+    const after = backend.serverEndpoints(first.serverId);
+    expect(after.map((e) => `${e.method} ${e.url.replace("${ENDPOINT_BASE_URL}", "")}`)).toEqual([
+      "GET /patients",
+      "POST /patients",
+      "GET /patients/{id}",
+      "GET /health",
+    ]);
+    // Updated in place: endpoint ids of kept endpoints don't change either.
+    expect(after[0].id).toBe(before.get("GET ${ENDPOINT_BASE_URL}/patients"));
+    expect(after[0].description).toBe("List every patient");
+    expect(backend.mcpServersCount).toBe(1);
+  });
+
+  it("recreates the server when the bound one was deleted", async () => {
+    const first = await build(MEDTRACK);
+    backend.deleteServer(first.serverId);
+
+    const r = await build(MEDTRACK);
+    expect(r.action).toBe("recreated");
+    expect(r.previousServerId).toBe(first.serverId);
+    expect(r.serverId).not.toBe(first.serverId);
+    expect(readServerBinding(cwd, "medtrack")?.id).toBe(r.serverId);
+    expect(backend.mcpServersCount).toBe(1);
+
+    // ...and the one after that reuses the new server.
+    expect((await build(MEDTRACK)).serverId).toBe(r.serverId);
+  });
+
+  it("--new creates a second server and rebinds the repo to it", async () => {
+    const first = await build(MEDTRACK);
+    const second = await build(MEDTRACK, { forceNew: true });
+
+    expect(second.action).toBe("created");
+    expect(second.serverId).not.toBe(first.serverId);
+    expect(backend.mcpServersCount).toBe(2);
+    expect(readServerBinding(cwd, "medtrack")?.id).toBe(second.serverId);
+    expect((await build(MEDTRACK)).serverId).toBe(second.serverId);
+    expect(backend.mcpServersCount).toBe(2);
+  });
+
+  it("a different --server-name gets its own server; each name keeps its id", async () => {
+    const a = await build(MEDTRACK);
+    const b = await build(MEDTRACK, { serverName: "medtrack-admin" });
+    expect(b.serverId).not.toBe(a.serverId);
+    expect((await build(MEDTRACK)).serverId).toBe(a.serverId);
+    expect((await build(MEDTRACK, { serverName: "medtrack-admin" })).serverId).toBe(b.serverId);
+    expect(backend.mcpServersCount).toBe(2);
+  });
+
+  it("keeps DEV and PROD bindings apart", async () => {
+    const dev = await build(MEDTRACK);
+    process.env.SYNAPSE_API_URL = PROD;
+    const prod = await build(MEDTRACK);
+    expect(prod.action).toBe("created");
+    expect(prod.serverId).not.toBe(dev.serverId);
+    process.env.SYNAPSE_API_URL = DEV;
+    expect(readServerBinding(cwd, "medtrack")?.id).toBe(dev.serverId);
+  });
+
+  it("a partial scan adds and updates but never deletes", async () => {
+    const first = await build(MEDTRACK);
+    const r = await build([MEDTRACK[0], ep("GET", "/health")], { partial: true });
+    expect(r).toMatchObject({ serverId: first.serverId, added: 1, removed: 0 });
+    expect(backend.serverEndpoints(first.serverId)).toHaveLength(5);
+  });
+
+  it("an endpoint upload failure keeps the binding so the next build reuses the server", async () => {
+    let fail = true;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (fail && String(url).endsWith("/endpoints/batch")) {
+          return new Response(JSON.stringify({ detail: "boom" }), { status: 500 });
+        }
+        return backend.fetch(url, init);
+      }),
+    );
+    const err = await build(MEDTRACK).catch((e) => e);
+    expect(err).toBeInstanceOf(ServerPublishError);
+    expect(err.phase).toBe("upload");
+
+    fail = false;
+    const r = await build(MEDTRACK);
+    expect(r.action).toBe("updated");
+    expect(r.added).toBe(4);
+    expect(backend.mcpServersCount).toBe(1);
+  });
+
+  it("reports a failed lookup of the bound server as a create-phase error", async () => {
+    await build(MEDTRACK);
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("{}", { status: 503 })));
+    const err = await build(MEDTRACK).catch((e) => e);
+    expect(err).toBeInstanceOf(ServerPublishError);
+    expect(err.phase).toBe("create");
+  });
+});
+
+describe("planEndpointSync", () => {
+  const have = (id: string, e: UiEndpointCreate, order: number): UiEndpoint => ({
+    id,
+    name: e.name,
+    description: e.description,
+    method: e.method,
+    url: e.url,
+    headers: e.headers,
+    payload: e.payload,
+    display_order: order,
+  });
+
+  it("matches by method + URL and leaves identical endpoints alone", () => {
+    const plan = planEndpointSync(MEDTRACK.map((e, i) => have(`e${i}`, e, i)), MEDTRACK);
+    expect(plan).toEqual({ create: [], update: [], remove: [], unchanged: 4 });
+  });
+
+  it("updates headers, payload and order in place", () => {
+    const existing = MEDTRACK.map((e, i) => have(`e${i}`, e, i));
+    const desired = [
+      MEDTRACK[1],
+      { ...MEDTRACK[0], headers: [{ key: "Authorization", value: "Bearer ${AUTH_TOKEN}" }] },
+      { ...MEDTRACK[2], payload: { q: 1 } },
+      MEDTRACK[3],
+    ];
+    const plan = planEndpointSync(existing, desired);
+    expect(plan.create).toEqual([]);
+    expect(plan.remove).toEqual([]);
+    expect(plan.update).toEqual([
+      { id: "e1", patch: { display_order: 0 } },
+      {
+        id: "e0",
+        patch: { headers: [{ key: "Authorization", value: "Bearer ${AUTH_TOKEN}" }], display_order: 1 },
+      },
+      { id: "e2", patch: { payload: { q: 1 } } },
+    ]);
+  });
+
+  it("replaces an endpoint whose payload must be cleared (PUT can't null it)", () => {
+    const existing = [have("e1", MEDTRACK[1], 0)];
+    const plan = planEndpointSync(existing, [{ ...MEDTRACK[1], payload: null }]);
+    expect(plan.remove).toEqual(["e1"]);
+    expect(plan.create).toHaveLength(1);
+  });
+
+  it("pairs duplicate method + URL endpoints one to one", () => {
+    // PATCH is coerced to POST, so POST /x can appear twice.
+    const a = ep("POST", "/x", { name: "Create X" });
+    const b = ep("POST", "/x", { name: "Patch X" });
+    const plan = planEndpointSync([have("e1", a, 0), have("e2", b, 1)], [a, b]);
+    expect(plan).toEqual({ create: [], update: [], remove: [], unchanged: 2 });
+  });
+});

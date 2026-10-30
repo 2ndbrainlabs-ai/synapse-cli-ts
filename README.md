@@ -72,6 +72,14 @@ Indexed lines are the lines of the source files a hosted build scans (`synapse a
 
 Without a flag, the picker defaults to Auto. `--smart-names` (Auto only) reads each selected handler's source plus your README to give the tools better names and descriptions.
 
+### Rebuilding
+
+A hosted Auto build creates one MCP server for the project and records its id in `.synapse/config.json`. Later builds update that same server: new endpoints are added, changed ones updated, and ones no longer in the code removed. The server id, and so the `SYNAPSE_SERVER_ID` in your MCP client config, stays the same, and a rebuild doesn't use up another MCP server from your quota.
+
+- If the server was deleted (or the API key belongs to a different account), the build creates a new one and tells you to update `SYNAPSE_SERVER_ID`.
+- `--new` creates a new server instead of updating the existing one, and later builds update the new one.
+- `--server-name <name>` picks the server by name (default: the folder name), so a different name gives the project a second server.
+
 ### Scripts and CI
 
 Auto mode asks which endpoints to expose. Where there's no terminal (CI, pipes, `--yes`), select them with a flag instead; either flag implies `--auto`:
@@ -398,6 +406,7 @@ Use `--global` to apply any of this to `~/.synapse` instead of the current proje
 | `synapse init [--force]` | Initialize Synapse in the current project. Uses the key from `SYNAPSE_API_KEY`, the project or `~/.synapse` (or prompts for one) and checks it with the backend. |
 | `synapse build [--auto \| --custom] [-q <query>] [--smart-names] [--local] [--resume]` | Generate an MCP server with the v2 engine. Without `--auto`/`--custom`, asks which mode. `-q` describes the Custom-mode tool. |
 | `synapse build --auto [--all-endpoints \| --endpoints <list>]` | Pick Auto-mode endpoints without the interactive picker (for CI). `<list>` is comma-separated `"METHOD /path"`, `/path` or tool names. |
+| `synapse build --auto [--server-name <name>] [--new]` | Rebuilds update the project's existing MCP server (same server id). `--new` creates another server; `--server-name` picks which one. |
 | `synapse build --engine v1 [-q <query>] [-o <file>] [--no-validate] [--no-docs] [-g]` | Legacy v1 engine (hosted, Python only). Needs `synapse analyze` first. |
 | `synapse analyze [-o <dir>] [-v]` | Scan Python code and write the symbol/schema map the v1 engine uses. |
 | `synapse config [--update] [--key <k>] [--global]` | View or update config. |
