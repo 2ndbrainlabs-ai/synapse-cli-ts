@@ -90,30 +90,6 @@ describe("SynapseClient retries on RESOURCE_EXHAUSTED", () => {
     return p;
   }
 
-  it("build: a lines-quota rejection is surfaced after one attempt with the server's words", async () => {
-    fake.errors = [{ code: 8, details: LINES_QUOTA }];
-    const res = await settle(client.build({ query: "q", projectSchema: "{}" }));
-
-    expect(fake.opened).toBe(1);
-    expect(res.success).toBe(false);
-    expect(res.error).toBe(`gRPC error: 8: ${LINES_QUOTA}`);
-    const wire = classifyFailure(res.error ?? "");
-    expect(wire.error_code).toBe(ERROR_CODES.QUOTA_EXCEEDED);
-    expect(wire.user_message).toBe(LINES_QUOTA);
-  });
-
-  it("build: rate limiting is still retried until it clears", async () => {
-    fake.errors = [
-      { code: 8, details: "Rate limit exceeded" },
-      { code: 8, details: "Rate limit exceeded" },
-      { code: 16, details: "Invalid or expired API key" },
-    ];
-    const res = await settle(client.build({ query: "q", projectSchema: "{}" }));
-
-    expect(fake.opened).toBe(3);
-    expect(res.error).toBe("gRPC error: 16: Invalid or expired API key");
-  });
-
   it("classifyCandidates: a server-quota rejection is not retried", async () => {
     fake.errors = [{ code: 8, details: SERVER_QUOTA }];
     const res = await settle(client.classifyCandidates({ manifestJson: "{}" }));
@@ -131,11 +107,26 @@ describe("SynapseClient retries on RESOURCE_EXHAUSTED", () => {
     expect(res.error).toMatch(/^Classifier failed after 3 attempts: gRPC error: 8: Rate limit/);
   });
 
+  it("classifyCandidates: rate limiting is retried until it clears", async () => {
+    fake.errors = [
+      { code: 8, details: "Rate limit exceeded" },
+      { code: 16, details: "Invalid or expired API key" },
+    ];
+    const res = await settle(client.classifyCandidates({ manifestJson: "{}" }));
+
+    expect(fake.opened).toBe(2);
+    expect(res.error).toBe("gRPC error: 16: Invalid or expired API key");
+  });
+
   it("nameEndpoints: a quota rejection is not retried", async () => {
     fake.errors = [{ code: 8, details: LINES_QUOTA }];
     const res = await settle(client.nameEndpoints({ endpoints: [], workingDir: process.cwd() }));
 
     expect(fake.opened).toBe(1);
     expect(res.success).toBe(false);
+    expect(res.error).toBe(`gRPC error: 8: ${LINES_QUOTA}`);
+    const wire = classifyFailure(res.error);
+    expect(wire.error_code).toBe(ERROR_CODES.QUOTA_EXCEEDED);
+    expect(wire.user_message).toBe(LINES_QUOTA);
   });
 });

@@ -472,7 +472,7 @@ export async function runCustomFlow(opts: CustomFlowOptions): Promise<void> {
 
   sectionHeader("Generating", "⚡");
 
-  // Two-phase UX (mirrors v1): a Spinner for pre-generation stages (shape,
+  // Two-phase UX: a Spinner for pre-generation stages (shape,
   // render), and CodeGenerationUI tip box once the backend flips to
   // "generating". Falls back cleanly on non-TTY / --no-tty.
   const state = {
@@ -576,8 +576,8 @@ export async function runCustomFlow(opts: CustomFlowOptions): Promise<void> {
     stepWarn("Verify checks did not pass", "file written anyway — review before running");
   }
 
-  // Detect env vars from the rendered code, same regex the v1 flow used —
-  // catches os.getenv("FOO") calls even if the backend didn't report them.
+  // Detect env vars from the rendered code — catches os.getenv("FOO") calls
+  // even if the backend didn't report them.
   const envVarMatches = (result.file_source ?? "").matchAll(
     /os\.getenv\(["']([A-Z_][A-Z0-9_]*)["']/g,
   );

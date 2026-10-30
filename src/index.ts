@@ -2,7 +2,7 @@ import { config as loadDotenv } from "dotenv";
 loadDotenv();
 
 import { createRequire } from "node:module";
-import { Command } from "commander";
+import { Command, Option } from "commander";
 
 // Suppress gRPC logging before any grpc imports
 process.env.GRPC_VERBOSITY = "ERROR";
@@ -93,14 +93,15 @@ program
     });
   });
 
+// Removed with the v1 engine (SYN-257). Hidden; explains the removal and
+// exits non-zero instead of commander's "unknown command".
 program
-  .command("analyze")
-  .description("Analyze codebase and generate project schema")
-  .option("-o, --output <dir>", "Output directory for analysis", ".synapse")
-  .option("-v, --verbose", "Verbose output")
-  .action(async (opts) => {
-    const { runAnalyze } = await import("./commands/analyze.js");
-    await runAnalyze(opts.output, opts.verbose ?? false);
+  .command("analyze", { hidden: true })
+  .allowUnknownOption()
+  .allowExcessArguments()
+  .action(async () => {
+    const { runAnalyzeRemoved } = await import("./commands/removed.js");
+    runAnalyzeRemoved();
   });
 
 function collectHeader(value: string, previous: string[]): string[] {
@@ -110,13 +111,15 @@ function collectHeader(value: string, previous: string[]): string[] {
 program
   .command("build")
   .description("Build MCP server based on requirements")
-  .option("-q, --query <query>", "MCP server requirements (v1) / workflow intent (v2 custom)")
-  .option("-o, --output <file>", "Output file for generated server (v1 only)", "mcp_server.py")
-  .option("--no-validate", "Skip validation step")
-  .option("--no-docs", "Skip documentation step")
-  .option("-g, --generate", "Skip planner and use existing todo_list.md")
-  // v2 flags
-  .option("--engine <version>", "Build engine: 'v2' (default, two-track) or 'v1' (legacy agent loop)", "v2")
+  .option("-q, --query <query>", "v2 custom: workflow intent")
+  // Hidden: v2 is the only engine (SYN-257). `--engine v2` is accepted as a
+  // no-op; `--engine v1` explains that v1 was removed.
+  .addOption(new Option("--engine <version>", "Build engine (only v2)").hideHelp())
+  // Hidden v1-only options: explain the removal instead of "unknown option".
+  .addOption(new Option("-o, --output <file>").hideHelp())
+  .addOption(new Option("-g, --generate").hideHelp())
+  .addOption(new Option("--no-validate").hideHelp())
+  .addOption(new Option("--no-docs").hideHelp())
   .option("--auto", "v2: force Auto track (expose HTTP endpoints via runner)")
   .option("--custom", "v2: force Custom track (compose internal functions)")
   .option("--base-url <url>", "v2 auto: deployed base URL for the API")
@@ -167,7 +170,8 @@ program
     "Deprecated alias for --llm-api-key; implies --provider anthropic.",
   )
   .action(async (opts) => {
-    if (opts.engine === "v2") {
+    const { checkRemovedBuildOptions } = await import("./commands/removed.js");
+    if (checkRemovedBuildOptions(opts)) {
       const { runBuildV2 } = await import("./commands/v2/build-v2.js");
       const maxTimeMinutes = opts.maxTime ? Number(opts.maxTime) : undefined;
       await runBuildV2({
@@ -192,18 +196,7 @@ program
         llmProject: opts.llmProject,
         anthropicKey: opts.anthropicKey,
       });
-      return;
     }
-    const { runBuild } = await import("./commands/build.js");
-    await runBuild({
-      query: opts.query,
-      output: opts.output,
-      validate: opts.validate,
-      docs: opts.docs,
-      generateOnly: opts.generate ?? false,
-      local: opts.local ?? false,
-      anthropicKey: opts.anthropicKey,
-    });
   });
 
 // `synapse model` — provider selection for local builds. Bare invocation shows

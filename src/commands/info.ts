@@ -6,8 +6,6 @@ import fs from "node:fs";
 
 import {
   getProjectSynapseDir,
-  getStatisticsPath,
-  getProjectSchemaPath,
   getIndexMetadataPath,
 } from "../config/paths.js";
 import {
@@ -71,31 +69,6 @@ function printProjectStatus(workingDir: string, _synapseDir: string): void {
   if (projDisplay) rows.push({ key: "API key", value: `${projDisplay} ${t.dim("(project)")}` });
   else if (globalDisplay) rows.push({ key: "API key", value: `${globalDisplay} ${t.dim("(global)")}` });
   else rows.push({ key: "API key", value: t.subtle("Not set") });
-
-  // Analysis stats
-  const statsPath = getStatisticsPath(workingDir);
-  const schemaPath = getProjectSchemaPath(workingDir);
-  if (fs.existsSync(statsPath)) {
-    try {
-      const stats = JSON.parse(fs.readFileSync(statsPath, "utf-8"));
-      const files = stats.file_count ?? 0;
-      const classes = stats.class_count ?? 0;
-      const funcs = stats.function_count ?? 0;
-      rows.push({
-        key: "Analyzed",
-        value: `${t.num(String(files))} files ${t.dim("·")} ${t.num(String(classes))} classes ${t.dim("·")} ${t.num(String(funcs))} functions`,
-      });
-    } catch {
-      /* ignore parse errors */
-    }
-  } else if (fs.existsSync(schemaPath)) {
-    rows.push({ key: "Analyzed", value: t.ok("Yes") });
-  } else {
-    rows.push({
-      key: "Analyzed",
-      value: `${t.subtle("Not yet")} ${t.dim(`(run ${t.cmd("synapse analyze")})`)}`,
-    });
-  }
 
   // Index metadata
   const indexMetaPath = getIndexMetadataPath(workingDir);

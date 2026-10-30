@@ -15,10 +15,10 @@ By participating in this project you agree to abide by our [Code of Conduct](./C
 
 ## Where the code lives
 
-- `src/commands/` — CLI subcommands (`init`, `build`, `analyze`, `info`, ...).
+- `src/commands/` — CLI subcommands (`init`, `build`, `info`, `config`, ...). `build` is the v2 engine in `src/commands/v2/`..
 - `src/config/` — config resolution, encryption for the Synapse API key.
 - `src/extractors/` — deterministic tree-sitter surface extraction.
-- `src/grpc/` — hosted-mode client + tool executor.
+- `src/grpc/` — hosted-mode gRPC client, quota and telemetry.
 - **`src/backend/`** — **in-process codegen pipeline for `--local` mode. Most improvements to prompts, schemas, templates, and the smoke verifier live here.**
 
 ## Development setup
@@ -42,7 +42,7 @@ Point the CLI at a local backend on `localhost:50051` with the `--dev` flag or `
 ## Pull request workflow
 
 1. **Open an issue first** for anything larger than a small fix, so we can align on approach before you invest time.
-2. **Branch from `main`** with a descriptive name: `fix/analyze-empty-repo`, `feat/rust-symbols`.
+2. **Branch from `main`** with a descriptive name: `fix/info-empty-repo`, `feat/rust-symbols`.
 3. **Keep PRs focused.** One logical change per PR. Split refactors from behavior changes.
 4. **Add tests.** Every bug fix should include a test that fails without the fix. Every new feature ships with unit or integration coverage.
 5. **Pass CI locally** before pushing:

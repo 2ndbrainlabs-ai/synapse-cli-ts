@@ -45,7 +45,7 @@ Pick 5 test repos (FastAPI-shaped, ≥50 public functions each). Suggested: any 
 
 13. **Quota exemption — local build.** Generate 20 MCP servers in `--local` on the same account. `synapse info` shows hosted `mcp_servers_count` unchanged. ui-backend logs show 20 `local_usage_build.local` events under `installation_id`.
 
-14. **Quota exemption — analyze.** `synapse analyze` in a `--local`-init'd project against a 1M-LOC repo. No `lines_indexed` increment. Same repo in hosted mode DOES increment and hits the limit.
+14. **Quota exemption — indexed lines.** `synapse build --local` against a 1M-LOC repo. No `lines_indexed` increment. The same repo built hosted DOES increment and hits the limit.
 
 15. **Hosted quota unchanged.** Hosted-mode build still increments `mcp_servers_count` and enforces `max_mcp_servers` at the same threshold as before.
 

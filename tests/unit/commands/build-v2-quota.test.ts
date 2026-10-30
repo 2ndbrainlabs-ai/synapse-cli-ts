@@ -48,7 +48,6 @@ vi.mock("../../../src/config/llm-config.js", async (importOriginal) => {
 });
 
 const { runBuildV2 } = await import("../../../src/commands/v2/build-v2.js");
-const { runAnalyze } = await import("../../../src/commands/analyze.js");
 
 const API = "https://api.example.test";
 const FAKE_KEY = "syn_live_test_00000000000000000000";
@@ -287,15 +286,14 @@ describe("v2 hosted build: lines quota (SYN-315)", () => {
   });
 });
 
-// analyze and hosted builds share one baseline: the same lines are charged
-// once, whichever command runs first (SYN-315).
-describe("analyze and v2 hosted build share one lines baseline", () => {
+// Every hosted build shares one baseline per repo, including the one an
+// older CLI's `synapse analyze` left behind (`total_lines_analyzed`), so the
+// same lines are charged once (SYN-315, SYN-257).
+describe("v2 hosted builds share one lines baseline", () => {
   const charged = () => events("analyze").map((e) => e.body?.lines_count);
 
-  it("analyze then build on unchanged code charges the build nothing", async () => {
-    await runAnalyze(".synapse", false);
-    expect(charged()).toEqual([1000]);
-    fetchMock.mockClear();
+  it("charges nothing for lines an older `synapse analyze` already reported", async () => {
+    fs.writeFileSync(prevPath(), JSON.stringify({ total_lines_analyzed: 1000 }));
 
     await runBuildV2({ custom: true, query: "orders" });
     await runBuildV2({ auto: true });
@@ -305,27 +303,26 @@ describe("analyze and v2 hosted build share one lines baseline", () => {
     expect(flows.runAutoFlow).toHaveBeenCalledTimes(1);
   });
 
-  it("build then analyze on unchanged code charges analyze nothing", async () => {
-    await runBuildV2({ auto: true });
+  it("custom then auto on unchanged code charges the second build nothing", async () => {
+    await runBuildV2({ custom: true, query: "orders" });
     expect(charged()).toEqual([1000]);
     fetchMock.mockClear();
 
-    await runAnalyze(".synapse", false);
+    await runBuildV2({ auto: true });
 
     expect(charged()).toEqual([]);
     expect(JSON.parse(prevFile()!)).toEqual(baseline(1000));
   });
 
-  it("charges growth once, whichever command sees it first", async () => {
-    await runAnalyze(".synapse", false);
+  it("charges growth once", async () => {
+    fs.writeFileSync(prevPath(), JSON.stringify({ total_lines_analyzed: 1000 }));
     writeRepo(cwd, 1300);
-    fetchMock.mockClear();
 
     await runBuildV2({ auto: true });
-    await runAnalyze(".synapse", false);
-    await runBuildV2({ auto: true });
+    await runBuildV2({ custom: true, query: "orders" });
 
     expect(charged()).toEqual([300]);
+    expect(JSON.parse(prevFile()!)).toEqual(baseline(1300));
   });
 
   it("migrates a file with both old keys to their max, without re-charging", async () => {
@@ -335,7 +332,6 @@ describe("analyze and v2 hosted build share one lines baseline", () => {
     );
 
     await runBuildV2({ auto: true });
-    await runAnalyze(".synapse", false);
 
     expect(charged()).toEqual([]);
     writeRepo(cwd, 1050);

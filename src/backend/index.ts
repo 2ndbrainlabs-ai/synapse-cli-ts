@@ -316,55 +316,6 @@ export class LocalSynapseClient {
     }
   }
 
-  // ---------------------------------------------------------------------
-  // discoverUseCases — hosted-only in v1 (uses agentic_generator.py's
-  // ReAct loop, not ported). Custom-flow works fully in local mode.
-  // ---------------------------------------------------------------------
-
-  async discoverUseCases(): Promise<{
-    useCases: never[];
-    error: string;
-  }> {
-    return {
-      useCases: [],
-      error:
-        "Use-case discovery (v1 track) is not available in --local mode. " +
-        "Use custom flow instead — it works fully offline.",
-    };
-  }
-
-  // ---------------------------------------------------------------------
-  // build (v1 template/agentic track) — hosted-only. Local mode is
-  // v2 Custom-only for now.
-  // ---------------------------------------------------------------------
-
-  async build(): Promise<{
-    success: boolean;
-    error: string;
-    sessionId: string;
-  }> {
-    const sessionId = generateSessionId();
-    return {
-      success: false,
-      error:
-        "The v1 build track is not available in --local mode. " +
-        "Local mode ships the v2 Custom track only. Re-run without --local " +
-        "if you need v1 (via the hosted service).",
-      sessionId,
-    };
-  }
-
-  // ---------------------------------------------------------------------
-  // detect — hosted-only. Local mode doesn't ship endpoint detection.
-  // ---------------------------------------------------------------------
-
-  async detect(): Promise<{ candidates: never[]; error: string }> {
-    return {
-      candidates: [],
-      error: "detect() is hosted-only. Local mode does not ship endpoint detection.",
-    };
-  }
-
   async close(): Promise<void> {
     // No persistent connections to tear down.
   }

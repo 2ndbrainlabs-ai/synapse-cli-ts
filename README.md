@@ -55,11 +55,11 @@ synapse build --custom --query "Expose user auth and profile lookup as one MCP t
 
 The free tier includes **10 MCP servers and 100,000 indexed lines**. `synapse info` shows your current usage.
 
-Indexed lines are the lines of the source files a hosted build scans (`synapse analyze` counts every Python file). Each run reports only the lines added since the last accepted report, so rebuilding an unchanged repo costs nothing. Local builds (`--local`) are never counted.
+Indexed lines are the lines of the source files a hosted build scans. Each run reports only the lines added since the last accepted report, so rebuilding an unchanged repo costs nothing. Local builds (`--local`) are never counted.
 
 ## Build modes: Auto and Custom
 
-`synapse build` runs the **v2 engine** by default. It detects your project's language, extracts its surface locally, and then builds in one of two modes:
+`synapse build` runs the **v2 engine**. It detects your project's language, extracts its surface locally, and then builds in one of two modes:
 
 | | **Auto** (`--auto`) | **Custom** (`--custom`) |
 |---|---|---|
@@ -94,7 +94,14 @@ Without a terminal and without either flag, the build stops with an error instea
 
 `synapse build` exits non-zero whenever the build doesn't finish: a failed composition, no endpoints selected, an invalid API key, an unreachable backend, a server error, or a scan paused by `--max-time` or Ctrl-C (resume with `--resume`).
 
-The legacy **v1 engine** is still available with `--engine v1`. It needs `synapse analyze` first, analyzes Python only, runs only on the hosted service, and writes `./mcp_server.py` (change with `-o`).
+### Upgrading from the v1 engine
+
+The legacy **v1 engine** and `synapse analyze` were removed in 0.2.0. v2 is the only engine:
+
+- Run `synapse build` without `--engine`. `--engine v2` is still accepted; `--engine v1` stops with a message and exits non-zero.
+- Drop `synapse analyze` from scripts. `synapse build` scans the code itself; `synapse analyze` now only prints that it was removed and exits non-zero.
+- `-o/--output`, `--no-validate`, `--no-docs` and `-g/--generate` were v1-only. Passing one now stops with a message and exits non-zero (earlier versions ignored them on v2 builds). v2 names its own output file (see the table above).
+- Old `.synapse/project_schema.txt`, `statistics.json` and `todo_list.md` files are no longer read and can be deleted. The line baseline in `statistics.prev.json` is still honoured, so lines already counted are not counted again.
 
 ## Run locally with your own model
 
@@ -114,7 +121,6 @@ Locally-generated servers don't count against any quota. Anonymous usage telemet
 **Local-mode limits:**
 - Generated files are Python, and only Python projects get one. Auto mode on a TypeScript, Java, C#, Go or Rust project can name the tools (`--smart-names`) but writes no file; run it without `--local` to use the hosted runner instead.
 - Both modes work locally. Auto (`--auto`) writes a passthrough server without calling a model (unless you add `--smart-names`); Custom (`--custom`) uses your model to compose the tool.
-- The legacy v1 engine (`--engine v1`) is hosted-only.
 - Provider selection applies to local mode **only** — hosted builds run on the Synapse service, and `synapse model` does not change them.
 
 ### Choosing a provider
@@ -407,8 +413,6 @@ Use `--global` to apply any of this to `~/.synapse` instead of the current proje
 | `synapse build [--auto \| --custom] [-q <query>] [--smart-names] [--local] [--resume]` | Generate an MCP server with the v2 engine. Without `--auto`/`--custom`, asks which mode. `-q` describes the Custom-mode tool. |
 | `synapse build --auto [--all-endpoints \| --endpoints <list>]` | Pick Auto-mode endpoints without the interactive picker (for CI). `<list>` is comma-separated `"METHOD /path"`, `/path` or tool names. |
 | `synapse build --auto [--server-name <name>] [--new]` | Rebuilds update the project's existing MCP server (same server id). `--new` creates another server; `--server-name` picks which one. |
-| `synapse build --engine v1 [-q <query>] [-o <file>] [--no-validate] [--no-docs] [-g]` | Legacy v1 engine (hosted, Python only). Needs `synapse analyze` first. |
-| `synapse analyze [-o <dir>] [-v]` | Scan Python code and write the symbol/schema map the v1 engine uses. |
 | `synapse config` | Show settings: the API key in use (redacted) and where it comes from, saved keys, project, endpoints and the local-build provider. |
 | `synapse config set-key [<key>] [--global]` | Check a Synapse API key with the backend, then save it encrypted. Prompts when `<key>` is omitted. `--key <k>` and `--update` are aliases. |
 | `synapse config keys` | List the active API keys on your account. |
@@ -455,13 +459,11 @@ The inference provider used by `--local` builds is configured separately — see
 
 ## How `build` works
 
-With the default v2 engine:
+With the v2 engine:
 
 1. **Scan (local).** The CLI detects the project language and extracts HTTP routes (and, in Custom mode, public functions) with tree-sitter. This runs on your machine; the scan can be paused and continued with `--resume`.
 2. **Pick.** You choose Auto or Custom, then the endpoints or functions to expose.
 3. **Generate.** Auto mode saves the endpoint config to your Synapse account (hosted) or writes a passthrough server (`--local`). Custom mode sends the extracted manifest and your description to the backend (hosted) or to your model (`--local`), which composes the tool; it is checked and written to your project as a Python file.
-
-The legacy v1 engine (`--engine v1`) works differently: a hosted agent explores the code by asking the CLI to run `read_file`, `grep`, `list_symbols` and similar tools, so the contents of the files it asks for are sent to the backend.
 
 ## What leaves your machine
 
@@ -470,10 +472,9 @@ The legacy v1 engine (`--engine v1`) works differently: a hosted agent explores 
 | Hosted Auto | Synapse API | For each endpoint you select: name, description (from the docstring), HTTP method, route path, header names with `${ENV}` placeholders, and an example payload. Saved to your account as the MCP server config. |
 | Hosted Auto + `--smart-names` | Synapse backend | The above, plus the **source code** of each selected handler (up to 3,000 characters each) and up to 6,000 characters of your README / `docs/` files. |
 | Hosted Custom | Synapse backend | The extracted manifest: module and function names, signatures, docstrings (trimmed), file paths and line numbers, and route metadata, plus your workflow description. Function bodies are not sent by the CLI. |
-| Hosted v1 (`--engine v1`) | Synapse backend | The project schema from `synapse analyze`, plus the contents of the files, search results and symbols the agent asks for. |
 | `--local` | Your chosen model provider | Custom mode and `--smart-names` send the same kind of content as the hosted rows above. Auto mode without `--smart-names` calls no model. Nothing goes to Synapse except telemetry. |
 | Telemetry (all modes) | Synapse API | Event name, mode, counts, model name, token counts and timings, plus SHA-256 hashes of your working directory path, your machine/user and (for `--local` model calls) each prompt. Hosted events are tied to your API key. No code, no prompts. Turn off with `SYNAPSE_TELEMETRY=0`. |
-| Quota (hosted builds and `synapse analyze`) | Synapse API | A quota check before the build, and the number of newly indexed lines, both authenticated with your API key. Sent even with `SYNAPSE_TELEMETRY=0`, because the free-tier limit is enforced from it; with telemetry off the line count goes alone (event name, line count, mode), with no hashes, installation id or CLI version. Not sent for `--local` builds. |
+| Quota (hosted builds) | Synapse API | A quota check before the build, and the number of newly indexed lines, both authenticated with your API key. Sent even with `SYNAPSE_TELEMETRY=0`, because the free-tier limit is enforced from it; with telemetry off the line count goes alone (event name, line count, mode), with no hashes, installation id or CLI version. Not sent for `--local` builds. |
 
 Hosted smart naming and Custom mode do read your code. We don't log or host your code. For hosted Auto builds, your account stores the endpoint config listed above so the runner can serve your tools.
 
@@ -493,7 +494,7 @@ Hosted Auto mode writes no file for any language: the hosted runner serves the t
 | Message | Fix |
 |---|---|
 | `Not Initialized` on `build` | Run `synapse init` |
-| `Analysis Required` (with `--engine v1`) | Run `synapse analyze` |
+| `v1 engine removed`, `analyze removed` or `Option removed` | v1, `synapse analyze` and the v1-only build flags were removed in 0.2.0. Run `synapse build` without them. See [Upgrading from the v1 engine](#upgrading-from-the-v1-engine). |
 | `Quota Exceeded` | Check `synapse info`. The free tier allows 10 MCP servers and 100,000 indexed lines. |
 | `Your Synapse API key is invalid or expired` `[AUTH_INVALID]` | Save a valid key with `synapse config set-key`, or set `SYNAPSE_API_KEY` (it overrides saved keys). |
 | `Endpoint Selection Required` | No terminal to pick endpoints in. Pass `--all-endpoints` or `--endpoints <list>`. |
