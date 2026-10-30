@@ -358,7 +358,8 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
 
   // ---------------------------------------------------------------------------
   // Lines-indexed quota (hosted only — local builds never count against it).
-  // Send the lines this repo added since the last accepted report, BEFORE any
+  // Send the lines above the repo's baseline (shared with `synapse analyze`,
+  // so lines already charged there are not charged again), BEFORE any
   // code generation, so a 429 stops the build. Other failures (401, 5xx,
   // timeout) fail open: the build continues and the same lines are resent
   // next time because the baseline only moves on success (SYN-315).
@@ -371,8 +372,6 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
         workingDir,
         synapseDir: getProjectSynapseDir(workingDir),
         totalLines: manifest.lines_scanned ?? 0,
-        key: "v2_lines_indexed",
-        highWater: true,
       });
     } catch {
       /* fail open — accounting must never crash the build */

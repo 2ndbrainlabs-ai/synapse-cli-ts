@@ -10,6 +10,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { ModuleInfo } from "../parsers/types.js";
 import { getParser, getSupportedExtensions } from "../parsers/registry.js";
+import { countLines } from "../utils/lines.js";
 
 const DEFAULT_IGNORE_DIRS = [
   "__pycache__",
@@ -283,12 +284,13 @@ export function generateStatisticsJson(
     0,
   );
 
-  // Count total lines across all analysed files
+  // Count total lines across all analysed files. Same measure as the v2
+  // extractor's lines_scanned, since both feed one quota baseline (SYN-315).
   let totalLines = 0;
   for (const mod of modules) {
     try {
       const content = fs.readFileSync(mod.filePath, "utf-8");
-      totalLines += content.split("\n").length;
+      totalLines += countLines(content);
     } catch {
       /* skip unreadable files */
     }

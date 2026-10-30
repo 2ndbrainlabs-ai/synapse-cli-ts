@@ -73,16 +73,16 @@ export async function runAnalyze(
     console.log();
     renderResults(statistics, chunkCount, outputDir);
 
-    // Quota accounting — report only the lines not reported before. The
-    // baseline in statistics.prev.json moves only when the server accepts the
-    // event, so lines from a failed send are sent again next run (SYN-315).
+    // Quota accounting — report only the lines above the repo's baseline,
+    // which hosted builds share, so analyze + build never charge the same
+    // lines twice. The baseline moves only when the server accepts the event,
+    // so lines from a failed send are sent again next run (SYN-315).
     try {
       const report = await reportIndexedLines({
         apiKey: resolveApiKey(workingDir) ?? "",
         workingDir,
         synapseDir,
         totalLines: statistics.total_lines_analyzed,
-        key: "total_lines_analyzed",
         outcome: { success: true },
       });
       if (report.kind === "quota_exceeded") showQuotaExceeded(report.message);
