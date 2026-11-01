@@ -3,5 +3,5 @@
   "backend_host": "localhost",
   "backend_port": "50051",
   "api_url": "https://api.synapse.2ndbrainlabs.ai",
-  "version": "0.1.6"
+  "version": "0.1.7"
 }

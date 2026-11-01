@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.7](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/compare/v0.1.6...v0.1.7) (2026-11-01)
+
+
+### Bug Fixes
+
+* **analyze:** count non-Python source files and lines (SYN-274) ([#47](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/issues/47)) ([47b18d8](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/commit/47b18d89220c6bd00776ba7497dcfb4339157769))
+
 ## [0.1.6](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/compare/v0.1.5...v0.1.6) (2026-10-30)
 
 
