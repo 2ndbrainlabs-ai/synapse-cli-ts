@@ -26,7 +26,58 @@ const DEFAULT_IGNORE_DIRS = [
   ".pytest_cache",
   ".mypy_cache",
   ".tox",
+  // Build output and vendored third-party code in Go, Java, Rust, C# and PHP
+  // repos. Their source would otherwise be counted as the user's (SYN-274).
+  "target",
+  "vendor",
+  "obj",
 ];
+
+/**
+ * Source files analyze counts, by extension, for the languages Synapse can
+ * build (the same set as the v2 extractors). Python files are also parsed for
+ * classes and functions; the others are counted by files and lines only.
+ * Without this, analyze reported 0 files and 0 lines for any repo that is not
+ * Python (SYN-274).
+ */
+export const SUPPORTED_SOURCE_EXTENSIONS: Readonly<Record<string, string>> = {
+  ".py": "Python",
+  ".ts": "TypeScript",
+  ".tsx": "TypeScript",
+  ".java": "Java",
+  ".cs": "C#",
+  ".go": "Go",
+  ".rs": "Rust",
+};
+
+/**
+ * Source files in languages Synapse does not support yet. They are not
+ * counted or charged, but analyze names them so a repo in one of these
+ * languages does not silently report 0 files.
+ */
+export const UNSUPPORTED_SOURCE_EXTENSIONS: Readonly<Record<string, string>> = {
+  ".js": "JavaScript",
+  ".jsx": "JavaScript",
+  ".mjs": "JavaScript",
+  ".cjs": "JavaScript",
+  ".php": "PHP",
+  ".rb": "Ruby",
+  ".kt": "Kotlin",
+  ".kts": "Kotlin",
+  ".scala": "Scala",
+  ".swift": "Swift",
+  ".c": "C",
+  ".h": "C/C++",
+  ".cc": "C++",
+  ".cpp": "C++",
+  ".cxx": "C++",
+  ".hpp": "C++",
+  ".m": "Objective-C",
+  ".ex": "Elixir",
+  ".exs": "Elixir",
+  ".dart": "Dart",
+  ".lua": "Lua",
+};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -35,8 +86,14 @@ const DEFAULT_IGNORE_DIRS = [
 export interface ScanResults {
   treeStructure: string;
   directories: string[];
-  /** Kept as pythonFiles for compatibility, though it includes all parseable files. */
+  /** Files with a registered structural parser (currently .py). */
   pythonFiles: string[];
+  /** Every file in a supported language, parsed or not (see SUPPORTED_SOURCE_EXTENSIONS). */
+  sourceFiles: string[];
+  /** File count per supported language, e.g. { Go: 12, Python: 1 }. */
+  languages: Record<string, number>;
+  /** File count per language Synapse does not support yet, e.g. { PHP: 40 }. */
+  unsupportedLanguages: Record<string, number>;
   rootDir: string;
 }
 
@@ -50,6 +107,10 @@ export interface ProjectStatistics {
   function_count: number;
   method_count: number;
   total_callable_count: number;
+  /** File count per supported language (SYN-274). */
+  languages: Record<string, number>;
+  /** File count per language found but not supported yet (SYN-274). */
+  unsupported_languages: Record<string, number>;
   modules: Array<{
     name: string;
     file: string;
@@ -76,7 +137,11 @@ export function scanProjectStructure(
 
   const directories: string[] = [];
   const pythonFiles: string[] = [];
+  const sourceFiles: string[] = [];
+  const languages: Record<string, number> = {};
+  const unsupportedLanguages: Record<string, number> = {};
   const treeLines: string[] = [];
+  const supportedExts = getSupportedExtensions();
 
   const ignoreSet = new Set(ignoreDirs);
 
@@ -120,9 +185,16 @@ export function scanProjectStructure(
         treeLines.push(`${prefix}${connector}${entry.name}`);
         // Track files that have a registered parser (currently .py)
         const ext = path.extname(entry.name);
-        const supportedExts = getSupportedExtensions();
         if (supportedExts.includes(ext)) {
           pythonFiles.push(relPath);
+        }
+        const language = SUPPORTED_SOURCE_EXTENSIONS[ext];
+        if (language) {
+          sourceFiles.push(relPath);
+          languages[language] = (languages[language] ?? 0) + 1;
+        } else if (!supportedExts.includes(ext)) {
+          const other = UNSUPPORTED_SOURCE_EXTENSIONS[ext];
+          if (other) unsupportedLanguages[other] = (unsupportedLanguages[other] ?? 0) + 1;
         }
       }
     }
@@ -136,6 +208,9 @@ export function scanProjectStructure(
     treeStructure: treeLines.join("\n"),
     directories,
     pythonFiles,
+    sourceFiles,
+    languages,
+    unsupportedLanguages,
     rootDir: workingDir,
   };
 }
@@ -284,12 +359,13 @@ export function generateStatisticsJson(
     0,
   );
 
-  // Count total lines across all analysed files. Same measure as the v2
-  // extractor's lines_scanned, since both feed one quota baseline (SYN-315).
+  // Count total lines across every supported source file, parsed or not
+  // (SYN-274). Same measure as the v2 extractor's lines_scanned, since both
+  // feed one quota baseline (SYN-315).
   let totalLines = 0;
-  for (const mod of modules) {
+  for (const relFile of scanResults.sourceFiles) {
     try {
-      const content = fs.readFileSync(mod.filePath, "utf-8");
+      const content = fs.readFileSync(path.join(scanResults.rootDir, relFile), "utf-8");
       totalLines += countLines(content);
     } catch {
       /* skip unreadable files */
@@ -303,13 +379,15 @@ export function generateStatisticsJson(
   return {
     project_name: path.basename(scanResults.rootDir),
     directory_count: scanResults.directories.length + 1, // +1 for the root
-    file_count: scanResults.pythonFiles.length,
+    file_count: scanResults.sourceFiles.length,
     total_lines_analyzed: totalLines,
     module_count: nonEmptyModules.length,
     class_count: totalClasses,
     function_count: totalFunctions,
     method_count: totalMethods,
     total_callable_count: totalFunctions + totalMethods,
+    languages: scanResults.languages,
+    unsupported_languages: scanResults.unsupportedLanguages,
     modules: nonEmptyModules.map((m) => ({
       name: m.moduleName,
       file: m.filePath,
