@@ -35,6 +35,8 @@ vi.mock("../../../src/analyzer/codebase-analyzer.js", () => ({
       function_count: 1,
       method_count: 0,
       total_callable_count: 1,
+      languages: { Python: 1 },
+      unsupported_languages: {},
     },
   ],
   saveAnalysisResults: () => {},

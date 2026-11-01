@@ -5,7 +5,7 @@ import {
   saveAnalysisResults,
 } from "../analyzer/codebase-analyzer.js";
 import type { ProjectStatistics } from "../analyzer/codebase-analyzer.js";
-import { t, stepOk, sectionHeader } from "../ui/theme.js";
+import { t, stepOk, stepWarn, stepInfo, sectionHeader } from "../ui/theme.js";
 import { roundedBox } from "../ui/box.js";
 import { Spinner } from "../ui/spinner.js";
 import { kvGrid } from "../ui/kv-grid.js";
@@ -127,6 +127,7 @@ function renderResults(
   const rows = [
     { key: "Directories", value: String(stats.directory_count), numeric: true, icon: EMOJI.folder },
     { key: "Files", value: String(stats.file_count), numeric: true, icon: EMOJI.file },
+    { key: "Languages", value: formatCounts(stats.languages) || "none" },
     { key: "Lines", value: stats.total_lines_analyzed.toLocaleString(), numeric: true },
     { key: "Classes", value: String(stats.class_count), numeric: true, icon: EMOJI.pkg },
     { key: "Functions", value: String(stats.function_count), numeric: true, icon: EMOJI.spark },
@@ -136,6 +137,7 @@ function renderResults(
 
   sectionHeader("Analysis Complete", "✓");
   kvGrid(rows, { rightAlignValues: true });
+  renderLanguageNotes(stats);
 
   console.log();
   console.log(`  ${t.dim("Output:")}`);
@@ -144,4 +146,34 @@ function renderResults(
   console.log();
   console.log(`  ${t.dim("Next:")}  ${t.cmd("synapse build")}`);
   console.log();
+}
+
+/** "Go (12), Python (1)", largest first. Empty string for no entries. */
+export function formatCounts(counts: Record<string, number> | undefined): string {
+  return Object.entries(counts ?? {})
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([lang, n]) => `${lang} (${n})`)
+    .join(", ");
+}
+
+/**
+ * Explain what the counts cover when the repo is not Python-only, so a Go or
+ * PHP repo never silently reports 0 files (SYN-274).
+ */
+export function renderLanguageNotes(stats: ProjectStatistics): void {
+  const nonPython = Object.keys(stats.languages ?? {}).filter((l) => l !== "Python");
+  const unsupported = formatCounts(stats.unsupported_languages);
+  if (nonPython.length > 0 || unsupported || stats.file_count === 0) console.log();
+
+  if (nonPython.length > 0) {
+    stepInfo(
+      `Class, function and method counts cover Python only. ${nonPython.join(", ")} files are counted by files and lines; ${t.cmd("synapse build")} extracts their endpoints.`,
+    );
+  }
+  if (unsupported) {
+    stepWarn(`Skipped files in languages Synapse does not support yet: ${unsupported}.`);
+  }
+  if (stats.file_count === 0 && !unsupported) {
+    stepWarn("No supported source files found (Python, TypeScript, Java, C#, Go, Rust).");
+  }
 }
