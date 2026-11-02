@@ -40,6 +40,7 @@ import { computeRepoHash, newSessionId } from "../../session/session-id.js";
 import { readCliVersion } from "../../utils/version.js";
 import { hasSelectionFlags } from "./endpoint-picker.js";
 import { BuildFailure, OUTCOME_CODES, type BuildReport } from "./build-outcome.js";
+import { SIGINT_FLUSH_MS, TELEMETRY_FLUSH_MS, withCap } from "../../utils/with-cap.js";
 import { getProjectSynapseDir } from "../../config/paths.js";
 import {
   reportIndexedLines,
@@ -95,12 +96,16 @@ interface BuildContext {
   effectiveMode: "hosted" | "local";
   language?: string;
   report: BuildReport;
+  /** True while the streamed extraction runs: Ctrl-C then pauses the session
+   *  (resumable) instead of cancelling the build. */
+  extracting?: boolean;
 }
 
 function isUserAbort(err: unknown): boolean {
   const e = err as { name?: string; code?: string } | null;
   return e?.name === "ExitPromptError" || e?.code === "ABORT_ERR";
 }
+
 
 export async function runBuildV2(opts: BuildV2Options): Promise<void> {
   const startedAt = Date.now();
@@ -109,6 +114,31 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
     effectiveMode: "hosted",
     report: { toolCount: 0, candidateCount: 0 },
   };
+
+  // One `build` event per run, whichever way the run ends.
+  let reported = false;
+  const report = (errorCode: string | undefined, capMs: number): Promise<void> => {
+    if (reported) return Promise.resolve();
+    reported = true;
+    return sendBuildTelemetry(ctx, Date.now() - startedAt, errorCode, capMs);
+  };
+
+  // Ctrl-C outside the extraction phase cancels the build. Before, the
+  // SessionManager's SIGINT listener swallowed it after extraction (the
+  // generation calls don't take its abort signal), and before the session
+  // existed the default handler killed the process with no event. During
+  // extraction the SessionManager pauses the session (SESSION_PAUSED) as
+  // before; it releases Ctrl-C once extraction is done. A second Ctrl-C while the event is being sent exits at once.
+  let sigints = 0;
+  const onSigint = (): void => {
+    if (ctx.extracting) return;
+    sigints += 1;
+    if (sigints > 1) process.exit(130);
+    process.stdout.write("\n");
+    stepWarn("Cancelled", "Ctrl-C");
+    void report(OUTCOME_CODES.CANCELLED, SIGINT_FLUSH_MS).finally(() => process.exit(130));
+  };
+  process.on("SIGINT", onSigint);
 
   let errorCode: string | undefined;
   let rethrow: unknown;
@@ -123,16 +153,28 @@ export async function runBuildV2(opts: BuildV2Options): Promise<void> {
       errorCode = isUserAbort(err) ? OUTCOME_CODES.CANCELLED : OUTCOME_CODES.UNEXPECTED;
       rethrow = err;
     }
+  } finally {
+    process.off("SIGINT", onSigint);
   }
 
   if (errorCode) process.exitCode = 1;
-  sendBuildTelemetry(ctx, Date.now() - startedAt, errorCode);
+  // A custom tool whose verify checks failed is still written (the user is
+  // told to review it), so the exit code stays 0 — but it is not a success.
+  const outcomeCode = errorCode ?? (ctx.report.verifyFailed ? OUTCOME_CODES.VERIFY_FAILED : undefined);
+  // Awaited (capped): the top-level handlers call process.exit on a rethrown
+  // error, which used to drop the in-flight CANCELLED / UNEXPECTED event.
+  await report(outcomeCode, TELEMETRY_FLUSH_MS);
   if (rethrow) throw rethrow;
 }
 
-/** Fire-and-forget — telemetry is never allowed to break or delay the build. */
-function sendBuildTelemetry(ctx: BuildContext, durationMs: number, errorCode?: string): void {
-  void import("../../grpc/telemetry.js")
+/** Never throws, and never waits longer than capMs. */
+async function sendBuildTelemetry(
+  ctx: BuildContext,
+  durationMs: number,
+  errorCode: string | undefined,
+  capMs: number,
+): Promise<void> {
+  const send = import("../../grpc/telemetry.js")
     .then(({ trackEvent }) =>
       trackEvent(
         "build",
@@ -146,7 +188,9 @@ function sendBuildTelemetry(ctx: BuildContext, durationMs: number, errorCode?: s
         { success: !errorCode, errorCode, language: ctx.language },
       ),
     )
+    .then(() => {})
     .catch(() => {});
+  await withCap(send, capMs);
 }
 
 async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
@@ -312,6 +356,7 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
   });
 
   let manifest: Awaited<ReturnType<typeof extractSurfaceStreamed>>;
+  ctx.extracting = true;
   try {
     manifest = await extractSurfaceStreamed({
       workingDir,
@@ -319,6 +364,7 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
       captureFunctions: mode === "custom",
     });
   } catch (e) {
+    ctx.extracting = false;
     spinner.fail("Extraction failed", String(e));
     session.recordError({
       code: "EXTRACTOR_FAILED",
@@ -330,6 +376,11 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
     session.dispose();
     throw new BuildFailure(OUTCOME_CODES.EXTRACTOR_FAILED);
   }
+
+  ctx.extracting = false;
+  // Ctrl-C from here on cancels the build (runBuildV2's handler); the
+  // session's own handler would only abort a classify call mid-flight.
+  session.releaseSigint();
 
   if (session.aborted) {
     // Session was paused (sigint or time_cap). Report gracefully.

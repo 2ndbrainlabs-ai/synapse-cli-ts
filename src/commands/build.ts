@@ -29,6 +29,8 @@ import { selectUseCases, type UseCaseChoice } from "../ui/endpoint-selector.js";
 import { styledInput } from "../ui/styled-input.js";
 import { pickVerb } from "../ui/verbs.js";
 import { ToolActivity } from "../ui/tool-activity.js";
+import { OUTCOME_CODES } from "./v2/build-outcome.js";
+import { TELEMETRY_FLUSH_MS, withCap } from "../utils/with-cap.js";
 
 export interface BuildOptions {
   query?: string;
@@ -43,10 +45,59 @@ export interface BuildOptions {
 }
 
 // ---------------------------------------------------------------------------
-// Main entry
+// Outcome telemetry. The v1 engine used to send a `build` event only for a
+// successful build with tools, so its failures were invisible. Every run now
+// sends one event; exit codes are unchanged (v1 keeps exiting 0).
 // ---------------------------------------------------------------------------
 
+/** Filled in as the v1 build runs; read once at the end for telemetry. */
+interface V1Outcome {
+  errorCode?: string;
+  toolCount: number;
+}
+
+function failed(outcome: V1Outcome, code: string): void {
+  outcome.errorCode = code;
+}
+
 export async function runBuild(opts: BuildOptions): Promise<void> {
+  const startedAt = Date.now();
+  const outcome: V1Outcome = { toolCount: 0 };
+  let rethrow: unknown;
+  try {
+    await buildV1(opts, outcome);
+  } catch (err) {
+    const e = err as { name?: string; code?: string } | null;
+    outcome.errorCode =
+      e?.name === "ExitPromptError" || e?.code === "ABORT_ERR"
+        ? OUTCOME_CODES.CANCELLED
+        : OUTCOME_CODES.UNEXPECTED;
+    rethrow = err;
+  }
+
+  // Awaited (capped) so a rethrown error can't exit before the event is sent.
+  try {
+    const { trackEvent } = await import("../grpc/telemetry.js");
+    const workingDir = process.cwd();
+    const send = trackEvent(
+      "build",
+      resolveApiKey(workingDir) ?? "",
+      workingDir,
+      0,
+      outcome.toolCount,
+      0,
+      Date.now() - startedAt,
+      "hosted",
+      { success: !outcome.errorCode, errorCode: outcome.errorCode, language: "python" },
+    );
+    await withCap(send, TELEMETRY_FLUSH_MS);
+  } catch {
+    /* optional */
+  }
+  if (rethrow) throw rethrow;
+}
+
+async function buildV1(opts: BuildOptions, outcome: V1Outcome): Promise<void> {
   const workingDir = process.cwd();
   const synapseDir = getProjectSynapseDir(workingDir);
 
@@ -57,7 +108,7 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
       "",
       `Run ${t.cmd("synapse init")} first.`,
     ]);
-    return;
+    return failed(outcome, OUTCOME_CODES.NOT_INITIALIZED);
   }
 
   // 2. Quota check (best-effort)
@@ -68,7 +119,7 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
       const [exceeded, msg] = await checkQuota(apiKey);
       if (exceeded) {
         roundedBox("Quota Exceeded", "⚠", t.warn, [msg]);
-        return;
+        return failed(outcome, OUTCOME_CODES.QUOTA_EXCEEDED);
       }
     } catch {
       /* fail open */
@@ -83,7 +134,7 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
       "",
       `Run ${t.cmd("synapse analyze")} first.`,
     ]);
-    return;
+    return failed(outcome, "ANALYSIS_REQUIRED");
   }
 
   // 4. Register parser
@@ -101,7 +152,7 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
         `Cannot use ${t.cmd("--generate")}: todo_list.md not found.`,
         `Run ${t.cmd("synapse build")} without --generate first.`,
       ]);
-      return;
+      return failed(outcome, "MISSING_TODO_LIST");
     }
     stepInfo("Generate mode", "using existing todo_list.md");
     const todoContent = fs.readFileSync(todoPath, "utf-8");
@@ -112,6 +163,7 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
       "Generate from existing todo_list.md",
       null,
       todoContent,
+      outcome,
     );
   }
 
@@ -204,7 +256,7 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
       roundedBox("Query Too Short", "⚠", t.warn, [
         "Please provide at least 10 characters.",
       ]);
-      return;
+      return failed(outcome, "QUERY_TOO_SHORT");
     }
   }
 
@@ -214,7 +266,7 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
       "",
       `Use ${t.cmd("synapse build --query '<requirements>'")}`,
     ]);
-    return;
+    return failed(outcome, "NO_INPUT");
   }
 
   // 9. Build context bundle (empty — backend does agentic retrieval)
@@ -235,7 +287,7 @@ export async function runBuild(opts: BuildOptions): Promise<void> {
   }
 
   // 10. Generation
-  return runGeneration(workingDir, schemaPath, opts, finalQuery, contextBundle, null);
+  return runGeneration(workingDir, schemaPath, opts, finalQuery, contextBundle, null, outcome);
 }
 
 // ---------------------------------------------------------------------------
@@ -249,6 +301,7 @@ async function runGeneration(
   query: string,
   contextBundle: Record<string, unknown> | null,
   todoListContent: string | null,
+  outcome: V1Outcome,
 ): Promise<void> {
   const projectSchema = fs.readFileSync(schemaPath, "utf-8");
   let currentStage = "";
@@ -357,25 +410,11 @@ async function runGeneration(
       roundedBox("Build Failed", "✖", t.err, [
         result.error ?? "Unknown error",
       ]);
-      return;
+      return failed(outcome, "BUILD_FAILED");
     }
 
-    // Telemetry
-    const toolCount = result.toolCount ?? 0;
-    if (toolCount > 0) {
-      try {
-        const resolvedKey = resolveApiKey(workingDir) ?? "";
-        if (resolvedKey) {
-          const { trackEvent } = await import("../grpc/telemetry.js");
-          const durationMs = Date.now() - genStartTime;
-          trackEvent("build", resolvedKey, workingDir, 0, toolCount, 0, durationMs).catch(
-            () => {},
-          );
-        }
-      } catch {
-        /* optional */
-      }
-    }
+    // Reported by runBuild once the run ends.
+    outcome.toolCount = result.toolCount ?? 0;
 
     // Write output
     if (result.serverCode) {
@@ -420,5 +459,6 @@ async function runGeneration(
       state.spinner = null;
     }
     roundedBox("Build Error", "✖", t.err, [String(e)]);
+    failed(outcome, "BUILD_ERROR");
   }
 }

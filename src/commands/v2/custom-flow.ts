@@ -589,6 +589,8 @@ export async function runCustomFlow(opts: CustomFlowOptions): Promise<void> {
   if (opts.report) opts.report.toolCount = 1;
 
   if (!result.success) {
+    // Reported as success=false / VERIFY_FAILED; the exit code stays 0.
+    if (opts.report) opts.report.verifyFailed = true;
     stepWarn("Verify checks did not pass", "file written anyway — review before running");
   }
 
