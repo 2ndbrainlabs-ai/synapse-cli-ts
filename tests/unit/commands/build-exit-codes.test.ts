@@ -245,6 +245,77 @@ describe("synapse build exit codes", () => {
     expect(outcome).toEqual({ success: true, errorCode: undefined, language: "python" });
   });
 
+  it("reports a custom build whose verify checks failed as VERIFY_FAILED, still exiting 0", async () => {
+    mocks.buildCustom = vi.fn().mockResolvedValue(
+      customResult({
+        success: false,
+        tool_name: "risk",
+        file_extension: "py",
+        file_source: "print('ok')\n",
+      }),
+    );
+    await runBuildV2({ custom: true, query: "score patients" });
+
+    expect(process.exitCode).toBeUndefined();
+    expect(fs.existsSync(path.join(project, "risk_server.py"))).toBe(true);
+    const [toolCount, , , , outcome] = await buildEvent();
+    expect(toolCount).toBe(1);
+    expect(outcome).toEqual({ success: false, errorCode: "VERIFY_FAILED", language: "python" });
+  });
+
+  it("sends the UNEXPECTED event before rethrowing a crash", async () => {
+    let delivered = false;
+    trackEvent.mockImplementation(
+      () => new Promise<void>((resolve) => setTimeout(() => { delivered = true; resolve(); }, 50)),
+    );
+    mocks.buildCustom = vi.fn().mockRejectedValue(new Error("boom"));
+
+    await expect(runBuildV2({ custom: true, query: "score patients" })).rejects.toThrow("boom");
+    // The top-level handler calls process.exit as soon as the error arrives,
+    // so the event must already be out by then.
+    expect(delivered).toBe(true);
+    const [, , , , outcome] = await buildEvent();
+    expect(outcome).toMatchObject({ success: false, errorCode: "UNEXPECTED" });
+  });
+
+  it("sends the CANCELLED event before rethrowing a prompt cancellation", async () => {
+    let delivered = false;
+    trackEvent.mockImplementation(
+      () => new Promise<void>((resolve) => setTimeout(() => { delivered = true; resolve(); }, 50)),
+    );
+    const abort = Object.assign(new Error("User force closed the prompt"), { name: "ExitPromptError" });
+    mocks.buildCustom = vi.fn().mockRejectedValue(abort);
+
+    await expect(runBuildV2({ custom: true, query: "score patients" })).rejects.toBe(abort);
+    expect(delivered).toBe(true);
+    const [, , , , outcome] = await buildEvent();
+    expect(outcome).toMatchObject({ success: false, errorCode: "CANCELLED" });
+  });
+
+  it("Ctrl-C after extraction cancels the build, sends CANCELLED and exits 130", async () => {
+    const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
+    let started!: () => void;
+    const inFlight = new Promise<void>((r) => { started = r; });
+    // Generation that never finishes on its own.
+    mocks.buildCustom = vi.fn().mockImplementation(() => {
+      started();
+      return new Promise(() => {});
+    });
+    void runBuildV2({ custom: true, query: "score patients" });
+    await inFlight;
+
+    process.emit("SIGINT");
+    await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(130));
+    const [, , , , outcome] = await buildEvent();
+    expect(outcome).toMatchObject({ success: false, errorCode: "CANCELLED", language: "python" });
+  });
+
+  it("removes its Ctrl-C listener when the build ends", async () => {
+    const before = process.listenerCount("SIGINT");
+    await runBuildV2({ auto: true, allEndpoints: true });
+    expect(process.listenerCount("SIGINT")).toBe(before);
+  });
+
   it("--auto without a terminal or selection flag exits non-zero with a clear message", async () => {
     await runBuildV2({ auto: true });
 

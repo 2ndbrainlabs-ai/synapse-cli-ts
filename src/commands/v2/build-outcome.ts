@@ -34,6 +34,8 @@ export const OUTCOME_CODES = {
   NO_FUNCTIONS_SELECTED: "NO_FUNCTIONS_SELECTED",
   UNSUPPORTED_LANGUAGE: "UNSUPPORTED_LANGUAGE",
   QUOTA_EXCEEDED: ERROR_CODES.QUOTA_EXCEEDED,
+  /** Custom tool written, but its verify checks did not pass. */
+  VERIFY_FAILED: "VERIFY_FAILED",
   UNEXPECTED: "UNEXPECTED",
 } as const;
 
@@ -54,6 +56,8 @@ export interface BuildReport {
   toolCount: number;
   /** Candidates the build chose from (detected endpoints or functions). */
   candidateCount: number;
+  /** Custom: the tool file was written but its verify checks failed. */
+  verifyFailed?: boolean;
   /** Hosted auto: the MCP server this build published to (SYN-285). */
   serverId?: string;
   /** Hosted auto: whether that server was created, updated or recreated. */

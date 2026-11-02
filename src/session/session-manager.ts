@@ -181,6 +181,17 @@ export class SessionManager {
     }
   }
 
+  /** Stop handling Ctrl-C (the deadline still applies). The build calls this
+   *  once extraction is done: from then on Ctrl-C cancels the build instead
+   *  of pausing a session that has nothing left to resume. */
+  releaseSigint(): void {
+    try {
+      process.off("SIGINT", this.sigintHandler);
+    } catch {
+      /* ignore */
+    }
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
