@@ -31,7 +31,13 @@ vi.mock("../../../src/commands/v2/auto-flow.js", () => ({ runAutoFlow: flows.run
 vi.mock("../../../src/commands/v2/local-auto-flow.js", () => ({
   runLocalAutoFlow: flows.runLocalAutoFlow,
 }));
-vi.mock("../../../src/commands/v2/custom-flow.js", () => ({ runCustomFlow: flows.runCustomFlow }));
+vi.mock("../../../src/commands/v2/custom-flow.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../src/commands/v2/custom-flow.js")>();
+  return {
+    runCustomFlow: flows.runCustomFlow,
+    ensureCustomLanguageSupported: actual.ensureCustomLanguageSupported,
+  };
+});
 
 // Local mode only needs a resolvable model; no provider is ever called.
 vi.mock("../../../src/config/llm-config.js", async (importOriginal) => {
@@ -169,6 +175,62 @@ afterEach(() => {
 
 afterAll(() => {
   fs.rmSync(TMP_HOME, { recursive: true, force: true });
+});
+
+/** A small Go net/http service with one route. */
+function writeGoRepo(dir: string): void {
+  for (const f of fs.readdirSync(dir)) if (f !== ".synapse") fs.rmSync(path.join(dir, f), { recursive: true });
+  fs.writeFileSync(path.join(dir, "go.mod"), "module example.com/svc\n\ngo 1.22\n");
+  fs.writeFileSync(
+    path.join(dir, "main.go"),
+    [
+      "package main",
+      "",
+      'import "net/http"',
+      "",
+      "func listOrders(w http.ResponseWriter, r *http.Request) {}",
+      "",
+      "func main() {",
+      '\thttp.HandleFunc("GET /orders", listOrders)',
+      '\thttp.ListenAndServe(":8080", nil)',
+      "}",
+    ].join("\n") + "\n",
+  );
+}
+
+describe("v2 hosted build: unsupported custom language is never billed (SYN-366)", () => {
+  it("stops a Go custom build before the lines charge", async () => {
+    writeGoRepo(cwd);
+
+    await runBuildV2({ custom: true, query: "list orders" });
+
+    expect(output).toContain("Custom Mode Not Available");
+    expect(events("analyze")).toHaveLength(0);
+    expect(prevFile()).toBeNull();
+    expect(flows.runCustomFlow).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    expect(await buildEvent()).toMatchObject({
+      success: false,
+      error_code: "UNSUPPORTED_LANGUAGE",
+      language: "go",
+    });
+  });
+
+  it("still charges lines for a Go auto build", async () => {
+    writeGoRepo(cwd);
+
+    await runBuildV2({ auto: true });
+
+    expect(events("analyze")).toHaveLength(1);
+    expect(flows.runAutoFlow).toHaveBeenCalledTimes(1);
+  });
+
+  it("still charges lines for a Python custom build", async () => {
+    await runBuildV2({ custom: true, query: "fetch an order" });
+
+    expect(events("analyze").map((e) => e.body?.lines_count)).toEqual([1000]);
+    expect(flows.runCustomFlow).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("v2 hosted build: lines quota (SYN-315)", () => {
