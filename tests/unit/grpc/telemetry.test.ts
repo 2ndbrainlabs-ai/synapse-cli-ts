@@ -5,7 +5,9 @@
 // fire-and-forget either way.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import crypto from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 const versionState = vi.hoisted(() => ({ override: null as string | null }));
@@ -26,6 +28,7 @@ import {
   isQuotaExceeded,
 } from "../../../src/grpc/telemetry.js";
 import { readCliVersion } from "../../../src/utils/version.js";
+import { telemetryHash } from "../../../src/utils/telemetry-hash.js";
 
 const PKG_VERSION = (
   JSON.parse(
@@ -86,6 +89,37 @@ describe("trackEvent cli_version", () => {
     versionState.override = "0.0.0";
     await trackEvent("build", "syn_key", "/tmp/project");
     expect(sentBody()).not.toHaveProperty("cli_version");
+  });
+
+  it("sends the run's session_id when there is one (SYN-367)", async () => {
+    await trackEvent("build", "syn_key", "/tmp/project", 0, 1, 0, 0, "hosted", {
+      success: true,
+      sessionId: "sess_abcd1234_mvzk0000_a1b2c3",
+    });
+    expect(sentBody().session_id).toBe("sess_abcd1234_mvzk0000_a1b2c3");
+  });
+
+  it("omits session_id when there is none", async () => {
+    await trackEvent("init", "syn_key", "/tmp/project");
+    expect(sentBody()).not.toHaveProperty("session_id");
+  });
+
+  it("sends salted ids, not plain sha256 of the path and host@user (SYN-367)", async () => {
+    await trackEvent("build", "syn_key", "/tmp/project");
+    const body = sentBody();
+    const sha = (v: string) => crypto.createHash("sha256").update(v).digest("hex");
+    expect(body.working_dir_hash).toBe(telemetryHash("/tmp/project"));
+    expect(body.working_dir_hash).not.toBe(sha("/tmp/project"));
+    expect(body.installation_id).toBe(telemetryHash(`${os.hostname()}@${os.userInfo().username}`));
+    expect(body.installation_id).not.toBe(sha(`${os.hostname()}@${os.userInfo().username}`));
+  });
+
+  it("keeps the opted-out accounting record minimal: no session_id or ids", async () => {
+    process.env.SYNAPSE_TELEMETRY = "0";
+    await trackEvent("analyze", "syn_key", "/tmp/project", 120, 0, 0, 0, "hosted", {
+      sessionId: "sess_abcd1234_mvzk0000_a1b2c3",
+    });
+    expect(sentBody()).toEqual({ event_type: "analyze", lines_count: 120, mode: "hosted" });
   });
 
   it("never throws when the request fails", async () => {
