@@ -24,6 +24,7 @@ import { resolveApiKeyWithSource } from "../../config/manager.js";
 
 import type { SessionManager } from "../../session/session-manager.js";
 import type { ResolvedLlm } from "../../config/llm-config.js";
+import { languageName } from "./language-messages.js";
 
 export interface CustomFlowOptions {
   workingDir: string;
@@ -421,6 +422,21 @@ function stripModulePrefix(fullyQualified: string): string {
 export async function runCustomFlow(opts: CustomFlowOptions): Promise<void> {
   const functions = opts.manifest.functions;
   if (opts.report) opts.report.candidateCount = functions.length;
+
+  // Custom tools are rendered from a Python template, hosted and local alike.
+  // Stop before the classify/compose model calls instead of failing at render
+  // time with a template error (SYN-353).
+  if (opts.manifest.language !== "python") {
+    const lang = languageName(opts.manifest.language);
+    roundedBox("Custom Mode Not Available", "⚠", t.warn, [
+      `Detected language: ${lang}.`,
+      `Custom mode composes Python functions only; ${lang} is not supported yet.`,
+      "",
+      "Try:",
+      "  " + t.cmd("synapse build --auto") + ` — expose your ${lang} HTTP endpoints`,
+    ]);
+    throw new BuildFailure(OUTCOME_CODES.UNSUPPORTED_LANGUAGE);
+  }
 
   if (functions.length === 0 && !opts.intent) {
     roundedBox("No Composable Functions", "⚠", t.warn, [

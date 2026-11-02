@@ -46,6 +46,49 @@ const HANDLEFUNC_RE = /\.?HandleFunc\s*\(\s*"([^"]+)"/;
 const HANDLE_RE = /(?:http|mux|r)\.Handle\s*\(\s*"([^"]+)"/;
 // Gorilla .Methods("GET") chained after HandleFunc
 const METHODS_CHAIN_RE = /\.Methods\s*\(\s*"([^"]+)"/;
+// Go 1.22+ ServeMux patterns carry the method: "GET /patients/{id}",
+// optionally with a host: "POST example.com/items".
+const METHOD_PATTERN_RE = /^([A-Z]+)\s+(\S+)$/;
+
+/** Split a net/http pattern into method and path. Plain "/path" patterns
+ *  match every method; they keep the caller's fallback method. */
+export function splitServeMuxPattern(
+  pattern: string,
+  fallback: HttpMethod,
+): { method: HttpMethod; path: string } | null {
+  let method = fallback;
+  let rest = pattern.trim();
+  const m = rest.match(METHOD_PATTERN_RE);
+  if (m) {
+    // HEAD/OPTIONS/CONNECT/TRACE routes are not exposed as tools.
+    if (!isHttpMethod(m[1])) return null;
+    method = m[1];
+    rest = m[2];
+  }
+  if (!rest.startsWith("/")) {
+    const slash = rest.indexOf("/");
+    if (slash < 0) return null;
+    rest = rest.slice(slash); // drop the host part
+  }
+  return { method, path: rest };
+}
+
+/** The call's own callee and leading string arguments, e.g. `m.Get("/a")`.
+ *  Matching against the whole call text instead let a wrapper such as
+ *  `m.Group("/admin", func() { m.Get("/a", ...); m.Post("/b", ...) })`
+ *  report only its first nested route and skip the rest. */
+function callHead(node: TreeSitter.SyntaxNode, source: string): string {
+  const fn = node.childForFieldName("function");
+  const args = node.childForFieldName("arguments");
+  if (!fn || !args) return getNodeText(node, source);
+  const leading: string[] = [];
+  for (let i = 0; i < args.namedChildCount && leading.length < 2; i++) {
+    const arg = args.namedChild(i)!;
+    if (arg.type !== "interpreted_string_literal" && arg.type !== "raw_string_literal") break;
+    leading.push(getNodeText(arg, source));
+  }
+  return `${getNodeText(fn, source)}(${leading.join(", ")})`;
+}
 
 function suggestToolName(method: HttpMethod, routePath: string, handlerName: string): string {
   const generic = new Set(["handler", "handle", "index", "root", "endpoint"]);
@@ -75,7 +118,7 @@ function walkNode(
   functions: SurfaceFunction[],
 ): void {
   if (node.type === "call_expression") {
-    const raw = getNodeText(node, source);
+    const raw = callHead(node, source);
 
     function pushEp(method: HttpMethod, routePath: string): void {
       endpoints.push({
@@ -109,14 +152,19 @@ function walkNode(
     const handleFuncMatch = raw.match(HANDLEFUNC_RE);
     if (handleFuncMatch) {
       const methodsChain = raw.match(METHODS_CHAIN_RE);
-      const method = (methodsChain ? methodsChain[1].toUpperCase() : "GET") as HttpMethod;
-      pushEp(isHttpMethod(method) ? method : "GET", handleFuncMatch[1]);
+      const chained = methodsChain ? methodsChain[1].toUpperCase() : "GET";
+      const route = splitServeMuxPattern(handleFuncMatch[1], isHttpMethod(chained) ? chained : "GET");
+      if (route) pushEp(route.method, route.path);
       return;
     }
 
     // http.Handle / mux.Handle (all methods — default to GET, actual method is runtime)
     const handleMatch = raw.match(HANDLE_RE);
-    if (handleMatch) { pushEp("GET", handleMatch[1]); return; }
+    if (handleMatch) {
+      const route = splitServeMuxPattern(handleMatch[1], "GET");
+      if (route) pushEp(route.method, route.path);
+      return;
+    }
   }
 
   // Capture exported functions

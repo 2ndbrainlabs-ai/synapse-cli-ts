@@ -134,25 +134,47 @@ export async function extractSurfaceStreamed(
 }
 
 // -----------------------------------------------------------------------------
-// Language detection — root markers first, extension count as tiebreak
+// Language detection — source-file counts decide, root markers narrow it down
 // -----------------------------------------------------------------------------
 
-function detectLanguage(workingDir: string): SupportedLanguage {
-  for (const d of LANGUAGE_DETECTORS) {
-    if (!d.root_markers) continue;
-    if (d.root_markers.some((m) => fs.existsSync(path.join(workingDir, m)))) {
-      return d.language;
-    }
-  }
+/** Files counted before detection stops scanning (directory listing only, no reads). */
+const DETECTION_FILE_BUDGET = 50_000;
 
-  // Fallback: extension prevalence across a shallow scan.
+/**
+ * Detect the primary language of a repo.
+ *
+ * Root markers (go.mod, pyproject.toml, tsconfig.json, ...) say which
+ * languages are present, but many repos carry more than one: Gitea has
+ * go.mod plus a pyproject.toml for its template linter and a tsconfig.json
+ * for its frontend. Taking the first marker in a fixed order picked Python
+ * for Gitea, so the Python extractor ran on a Go repo and found nothing
+ * (SYN-353). Instead, among the languages whose marker is present, the one
+ * with the most source files wins; without markers, the most common
+ * supported extension wins. A marker with no matching source files is only
+ * used when no language has any.
+ */
+export function detectLanguage(workingDir: string): SupportedLanguage {
   const counts = new Map<SupportedLanguage, number>();
-  countExtensions(workingDir, workingDir, counts, /*budget*/ 2000);
-  let best: [SupportedLanguage, number] | null = null;
-  for (const entry of counts) {
-    if (!best || entry[1] > best[1]) best = entry;
-  }
-  if (best) return best[0];
+  countExtensions(workingDir, counts, DETECTION_FILE_BUDGET);
+  const count = (l: SupportedLanguage) => counts.get(l) ?? 0;
+
+  const marked = LANGUAGE_DETECTORS.filter((d) =>
+    d.root_markers?.some((m) => fs.existsSync(path.join(workingDir, m))),
+  ).map((d) => d.language);
+
+  const pickMost = (langs: SupportedLanguage[]): SupportedLanguage | null => {
+    let best: SupportedLanguage | null = null;
+    for (const l of langs) {
+      if (count(l) > 0 && (best === null || count(l) > count(best))) best = l;
+    }
+    return best;
+  };
+
+  const fromMarkers = pickMost(marked);
+  if (fromMarkers) return fromMarkers;
+  const fromCounts = pickMost(LANGUAGE_DETECTORS.map((d) => d.language));
+  if (fromCounts) return fromCounts;
+  if (marked.length > 0) return marked[0];
 
   throw new Error(
     `Could not detect a supported language in ${workingDir}. Supported: ${LANGUAGE_DETECTORS.map((d) => d.language).join(", ")}`,
@@ -161,12 +183,14 @@ function detectLanguage(workingDir: string): SupportedLanguage {
 
 const IGNORE_DIRS = new Set([
   "node_modules", ".git", ".venv", "venv", "dist", "build",
-  "__pycache__", ".synapse", "target", "bin", "obj",
+  "__pycache__", ".synapse", "target", "bin", "obj", "vendor",
 ]);
+
+/** Extra extensions counted toward a language beyond its detector's `extension`. */
+const EXTRA_EXTENSIONS: Record<string, SupportedLanguage> = { ".tsx": "typescript" };
 
 function countExtensions(
   dir: string,
-  root: string,
   counts: Map<SupportedLanguage, number>,
   budget: number,
 ): number {
@@ -182,12 +206,12 @@ function countExtensions(
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
       if (IGNORE_DIRS.has(entry.name) || entry.name.startsWith(".")) continue;
-      budget = countExtensions(full, root, counts, budget);
+      budget = countExtensions(full, counts, budget);
     } else if (entry.isFile()) {
       const ext = path.extname(entry.name);
-      const lang = LANGUAGE_DETECTORS.find((d) => d.extension === ext);
+      const lang = LANGUAGE_DETECTORS.find((d) => d.extension === ext)?.language ?? EXTRA_EXTENSIONS[ext];
       if (lang) {
-        counts.set(lang.language, (counts.get(lang.language) ?? 0) + 1);
+        counts.set(lang, (counts.get(lang) ?? 0) + 1);
       }
       budget -= 1;
     }
