@@ -172,6 +172,17 @@ func main() {
     expect(routes(source)).toEqual(["POST /items"]);
   });
 
+  it("does not read header or query lookups as routes", () => {
+    const source = `package api
+func Handle(ctx *Context) {
+	token := ctx.Req.Header.Get("Authorization")
+	page := ctx.FormValues().Get("page")
+	cache.Put("key", token)
+	m.Get("/version", Version)
+}`;
+    expect(routes(source)).toEqual(["GET /version"]);
+  });
+
   it("finds every route inside a group closure, not just the first", () => {
     const source = `package web
 func Routes(m *web.Router) {

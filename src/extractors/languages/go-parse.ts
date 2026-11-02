@@ -136,17 +136,22 @@ function walkNode(
       });
     }
 
+    // Router paths start with "/". Without this check, lookups such as
+    // req.Header.Get("Authorization") or query.Get("page") read as routes.
+    const isRoute = (m: RegExpMatchArray | null): m is RegExpMatchArray =>
+      m !== null && m[2].startsWith("/");
+
     // Gin/Echo uppercase: r.GET("/path", handler)
     const upperMatch = raw.match(VERB_UPPER_RE);
-    if (upperMatch) { pushEp(upperMatch[1] as HttpMethod, upperMatch[2]); return; }
+    if (isRoute(upperMatch)) { pushEp(upperMatch[1] as HttpMethod, upperMatch[2]); return; }
 
     // Chi/Fiber CamelCase: r.Get("/path", handler)
     const camelMatch = raw.match(VERB_CAMEL_RE);
-    if (camelMatch) { pushEp(camelMatch[1].toUpperCase() as HttpMethod, camelMatch[2]); return; }
+    if (isRoute(camelMatch)) { pushEp(camelMatch[1].toUpperCase() as HttpMethod, camelMatch[2]); return; }
 
     // Generic Handle/Add(method, path) — Gin router.Handle, echo.Add
     const handleMethodMatch = raw.match(HANDLE_METHOD_RE);
-    if (handleMethodMatch) { pushEp(handleMethodMatch[1] as HttpMethod, handleMethodMatch[2]); return; }
+    if (isRoute(handleMethodMatch)) { pushEp(handleMethodMatch[1] as HttpMethod, handleMethodMatch[2]); return; }
 
     // net/http HandleFunc: look for gorilla .Methods() chain for the real verb
     const handleFuncMatch = raw.match(HANDLEFUNC_RE);
