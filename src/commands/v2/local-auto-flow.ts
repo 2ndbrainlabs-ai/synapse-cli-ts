@@ -18,6 +18,7 @@ import { roundedBox } from "../../ui/box.js";
 import { Spinner } from "../../ui/spinner.js";
 import { canPrompt } from "../../ui/prompt.js";
 import { BuildFailure, OUTCOME_CODES, type BuildReport } from "./build-outcome.js";
+import { noEndpointsLines } from "./language-messages.js";
 
 export interface LocalAutoFlowOptions {
   workingDir: string;
@@ -44,7 +45,7 @@ export async function runLocalAutoFlow(opts: LocalAutoFlowOptions): Promise<void
 
   if (endpoints.length === 0) {
     roundedBox("No Endpoints Found", "⚠", t.warn, [
-      "The extractor didn't find any HTTP route decorators.",
+      ...noEndpointsLines(opts.manifest.language),
       "",
       "Try:",
       "  " + t.cmd("synapse build --local --custom") + " — compose internal functions",

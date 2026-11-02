@@ -132,6 +132,81 @@ describe("Go extractor — Gin", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Go — net/http method patterns and nested route groups (SYN-353)
+// ---------------------------------------------------------------------------
+describe("Go extractor — net/http and route groups", () => {
+  function routes(source: string): string[] {
+    const result = parseGoFile({ source, relPath: "main.go", module: "main" });
+    expect(result.parseOk).toBe(true);
+    return result.endpoints.map((e) => `${e.method} ${e.path}`);
+  }
+
+  it("reads the method from Go 1.22 ServeMux patterns", () => {
+    const source = `package main
+import "net/http"
+func main() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /patients", listPatients)
+	mux.HandleFunc("POST /patients", createPatient)
+	mux.HandleFunc("DELETE /patients/{id}", deletePatient)
+	mux.Handle("PUT api.example.com/patients/{id}", updatePatient)
+	mux.HandleFunc("HEAD /health", health)
+	mux.HandleFunc("/legacy", legacy)
+}`;
+    expect(routes(source)).toEqual([
+      "GET /patients",
+      "POST /patients",
+      "DELETE /patients/{id}",
+      "PUT /patients/{id}",
+      "GET /legacy",
+    ]);
+  });
+
+  it("keeps the gorilla .Methods() verb", () => {
+    const source = `package main
+import "github.com/gorilla/mux"
+func main() {
+	r := mux.NewRouter()
+	r.HandleFunc("/items", createItem).Methods("POST")
+}`;
+    expect(routes(source)).toEqual(["POST /items"]);
+  });
+
+  it("does not read header or query lookups as routes", () => {
+    const source = `package api
+func Handle(ctx *Context) {
+	token := ctx.Req.Header.Get("Authorization")
+	page := ctx.FormValues().Get("page")
+	cache.Put("key", token)
+	m.Get("/version", Version)
+}`;
+    expect(routes(source)).toEqual(["GET /version"]);
+  });
+
+  it("finds every route inside a group closure, not just the first", () => {
+    const source = `package web
+func Routes(m *web.Router) {
+	m.Group("/admin", func() {
+		m.Get("/users", listUsers)
+		m.Post("/users", createUser)
+		m.Delete("/users/{id}", deleteUser)
+	})
+	r.Route("/api", func(r chi.Router) {
+		r.Get("/repos", listRepos)
+		r.Put("/repos/{id}", updateRepo)
+	})
+}`;
+    expect(routes(source)).toEqual([
+      "GET /users",
+      "POST /users",
+      "DELETE /users/{id}",
+      "GET /repos",
+      "PUT /repos/{id}",
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // C# — ASP.NET Core (InvoiceController.cs)
 // ---------------------------------------------------------------------------
 describe("C# extractor — ASP.NET Core", () => {

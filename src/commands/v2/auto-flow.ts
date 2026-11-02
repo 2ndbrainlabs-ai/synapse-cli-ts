@@ -24,6 +24,7 @@ import {
   uiBackendFailure,
   type BuildReport,
 } from "./build-outcome.js";
+import { noEndpointsLines } from "./language-messages.js";
 
 const BASE_URL_VAR = "ENDPOINT_BASE_URL";
 const BASE_URL_PLACEHOLDER = "<your-app-deployed-url>";
@@ -77,7 +78,7 @@ export async function runAutoFlow(opts: AutoFlowOptions): Promise<void> {
 
   if (endpoints.length === 0) {
     roundedBox("No Endpoints Found", "⚠", t.warn, [
-      "The extractor didn't find any HTTP route decorators.",
+      ...noEndpointsLines(opts.manifest.language),
       "",
       "Try:",
       "  " + t.cmd("synapse build --custom") + " — compose internal functions",

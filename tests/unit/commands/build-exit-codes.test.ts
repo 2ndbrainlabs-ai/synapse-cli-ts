@@ -297,6 +297,38 @@ describe("synapse build exit codes", () => {
     expect(outcome).toMatchObject({ errorCode: "NO_ENDPOINTS" });
   });
 
+  it("names Python route decorators when a Python repo has no endpoints", async () => {
+    mocks.manifest = { ...manifest(), endpoints: [] };
+    await runBuildV2({ auto: true, allEndpoints: true });
+    expect(output()).toMatch(/Detected language: Python\./);
+    expect(output()).toMatch(/route decorators \(FastAPI, Flask, Django\)/);
+  });
+
+  it("describes Go routes, not decorators, when a Go repo has no endpoints (SYN-353)", async () => {
+    mocks.manifest = { ...manifest(), language: "go", framework: null, endpoints: [], functions: [] };
+    await runBuildV2({ auto: true, allEndpoints: true });
+
+    expect(process.exitCode).toBe(1);
+    expect(output()).toMatch(/Detected language: Go\./);
+    expect(output()).toMatch(/Go extractor didn't find any HTTP router calls \(net\/http HandleFunc, gin, echo, chi/);
+    expect(output()).not.toMatch(/decorator/i);
+    const [, , , , outcome] = await buildEvent();
+    expect(outcome).toMatchObject({ errorCode: "NO_ENDPOINTS", language: "go" });
+  });
+
+  it("stops custom mode on a non-Python repo before any backend call (SYN-353)", async () => {
+    mocks.manifest = { ...manifest(), language: "go", framework: "stdlib" };
+    await runBuildV2({ custom: true, query: "track medications" });
+
+    expect(process.exitCode).toBe(1);
+    expect(mocks.buildCustom).not.toHaveBeenCalled();
+    expect(output()).toMatch(/Custom Mode Not Available/);
+    expect(output()).toMatch(/Custom mode composes Python functions only; Go is not supported yet\./);
+    expect(output()).toMatch(/synapse build --auto/);
+    const [, , , , outcome] = await buildEvent();
+    expect(outcome).toMatchObject({ success: false, errorCode: "UNSUPPORTED_LANGUAGE", language: "go" });
+  });
+
   it("exits non-zero when the project isn't initialized", async () => {
     fs.rmSync(path.join(project, ".synapse"), { recursive: true });
     await runBuildV2({ auto: true, allEndpoints: true });

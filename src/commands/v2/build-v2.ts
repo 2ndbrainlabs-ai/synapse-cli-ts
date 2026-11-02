@@ -325,7 +325,7 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
       stage: "extract",
       message: "Couldn't extract the codebase surface.",
       technical: String(e),
-      hint: "Check that the repo has valid Python source. If this repeats, share the ledger via `synapse logs`.",
+      hint: "Check that the repo has valid source in a supported language (Python, TypeScript, Java, C#, Go, Rust). If this repeats, share the ledger via `synapse logs`.",
     });
     session.dispose();
     throw new BuildFailure(OUTCOME_CODES.EXTRACTOR_FAILED);
