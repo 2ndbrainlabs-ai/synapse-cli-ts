@@ -419,24 +419,30 @@ function stripModulePrefix(fullyQualified: string): string {
   return dot === -1 ? fullyQualified : fullyQualified.slice(dot + 1);
 }
 
+/**
+ * Custom tools are rendered from a Python template, hosted and local alike.
+ * Stop before the classify/compose model calls instead of failing at render
+ * time with a template error (SYN-353). runBuildV2 calls this before it
+ * charges indexed lines, so an unsupported build is never billed (SYN-366).
+ */
+export function ensureCustomLanguageSupported(language: string): void {
+  if (language === "python") return;
+  const lang = languageName(language);
+  roundedBox("Custom Mode Not Available", "⚠", t.warn, [
+    `Detected language: ${lang}.`,
+    `Custom mode composes Python functions only; ${lang} is not supported yet.`,
+    "",
+    "Try:",
+    "  " + t.cmd("synapse build --auto") + ` — expose your ${lang} HTTP endpoints`,
+  ]);
+  throw new BuildFailure(OUTCOME_CODES.UNSUPPORTED_LANGUAGE);
+}
+
 export async function runCustomFlow(opts: CustomFlowOptions): Promise<void> {
   const functions = opts.manifest.functions;
   if (opts.report) opts.report.candidateCount = functions.length;
 
-  // Custom tools are rendered from a Python template, hosted and local alike.
-  // Stop before the classify/compose model calls instead of failing at render
-  // time with a template error (SYN-353).
-  if (opts.manifest.language !== "python") {
-    const lang = languageName(opts.manifest.language);
-    roundedBox("Custom Mode Not Available", "⚠", t.warn, [
-      `Detected language: ${lang}.`,
-      `Custom mode composes Python functions only; ${lang} is not supported yet.`,
-      "",
-      "Try:",
-      "  " + t.cmd("synapse build --auto") + ` — expose your ${lang} HTTP endpoints`,
-    ]);
-    throw new BuildFailure(OUTCOME_CODES.UNSUPPORTED_LANGUAGE);
-  }
+  ensureCustomLanguageSupported(opts.manifest.language);
 
   if (functions.length === 0 && !opts.intent) {
     roundedBox("No Composable Functions", "⚠", t.warn, [

@@ -26,7 +26,7 @@ import { extractSurfaceStreamed } from "../../extractors/core/extractor.js";
 import { pickBuildMode, type BuildMode } from "./mode-picker.js";
 import { runAutoFlow } from "./auto-flow.js";
 import { runLocalAutoFlow } from "./local-auto-flow.js";
-import { runCustomFlow } from "./custom-flow.js";
+import { ensureCustomLanguageSupported, runCustomFlow } from "./custom-flow.js";
 import { t, sectionHeader, stepInfo, stepWarn, stepOk } from "../../ui/theme.js";
 import { roundedBox } from "../../ui/box.js";
 import { Spinner } from "../../ui/spinner.js";
@@ -408,6 +408,18 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
     "Language",
     `${manifest.language}${manifest.framework ? ` / ${manifest.framework}` : ""}`,
   );
+
+  // Custom mode supports Python only. Check before the lines charge below so
+  // an unsupported build is never billed (SYN-366).
+  if (mode === "custom") {
+    ctx.report.candidateCount = manifest.functions.length;
+    try {
+      ensureCustomLanguageSupported(manifest.language);
+    } catch (e) {
+      session.dispose();
+      throw e;
+    }
+  }
 
   // ---------------------------------------------------------------------------
   // Lines-indexed quota (hosted only — local builds never count against it).
