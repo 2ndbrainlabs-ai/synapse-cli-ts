@@ -200,7 +200,8 @@ describe("v2 hosted build: lines quota (SYN-315)", () => {
     writeRepo(cwd, 1250);
     fetchMock.mockClear();
 
-    await runBuildV2({ auto: true });
+    // Rebuilds reuse the saved discovery (SYN-8); --discover rescans.
+    await runBuildV2({ auto: true, discover: true });
 
     expect(events("analyze").map((e) => e.body?.lines_count)).toEqual([250]);
   });
@@ -249,6 +250,8 @@ describe("v2 hosted build: lines quota (SYN-315)", () => {
     expect(prevFile()).toBeNull();
     expect(process.exitCode).toBeUndefined();
 
+    // The rebuild reuses the saved discovery (SYN-8) and still resends the
+    // lines that were never accepted.
     fetchMock.mockClear();
     await runBuildV2({ auto: true });
     expect(events("analyze").map((e) => e.body?.lines_count)).toEqual([1000]);
@@ -261,7 +264,7 @@ describe("v2 hosted build: lines quota (SYN-315)", () => {
     writeRepo(cwd, 1400);
     server.analyze.push({ status: 401, body: { detail: "Invalid API key" } });
 
-    await runBuildV2({ auto: true });
+    await runBuildV2({ auto: true, discover: true });
 
     expect(prevFile()).toBe(before);
   });
@@ -339,7 +342,7 @@ describe("analyze and v2 hosted build share one lines baseline", () => {
 
     expect(charged()).toEqual([]);
     writeRepo(cwd, 1050);
-    await runBuildV2({ auto: true });
+    await runBuildV2({ auto: true, discover: true });
     expect(charged()).toEqual([50]);
     expect(JSON.parse(prevFile()!)).toEqual(baseline(1050));
   });

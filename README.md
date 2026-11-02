@@ -80,7 +80,25 @@ A hosted Auto build creates one MCP server for the project and records its id in
 - `--new` creates a new server instead of updating the existing one, and later builds update the new one.
 - `--server-name <name>` picks the server by name (default: the folder name), so a different name gives the project a second server.
 
-### Scripts and CI
+### Reusing discovered endpoints
+
+The first `synapse build` in a project scans the code and saves what it found to `.synapse/surface_cache.json` (endpoints and functions per file, no source code). Later builds, hosted or `--local`, reuse that result instead of scanning again, and print when it was discovered:
+
+```
+Using the endpoints discovered on Oct 30, 2026, 1:05 PM (12 endpoint(s)). Run synapse build --discover to rescan.
+```
+
+Code changes made since then are not picked up until you rescan:
+
+```bash
+synapse build --discover    # rescan; only files whose contents changed are parsed again
+```
+
+- A Custom build rescans if the saved result came from an Auto build, because Auto doesn't collect functions.
+- A saved result with no endpoints (or, for Custom, nothing at all) is not reused; the build scans again.
+- `--resume` takes precedence: it finishes the unfinished scan, then updates the saved result.
+- If the file is missing, unreadable or from another repo, the build scans as if it were the first one. Deleting it is always safe.
+
 
 Auto mode asks which endpoints to expose. Where there's no terminal (CI, pipes, `--yes`), select them with a flag instead; either flag implies `--auto`:
 
@@ -404,7 +422,7 @@ Use `--global` to apply any of this to `~/.synapse` instead of the current proje
 | Command | Purpose |
 |---|---|
 | `synapse init [--force]` | Initialize Synapse in the current project. Uses the key from `SYNAPSE_API_KEY`, the project or `~/.synapse` (or prompts for one) and checks it with the backend. |
-| `synapse build [--auto \| --custom] [-q <query>] [--smart-names] [--local] [--resume]` | Generate an MCP server with the v2 engine. Without `--auto`/`--custom`, asks which mode. `-q` describes the Custom-mode tool. |
+| `synapse build [--auto \| --custom] [-q <query>] [--smart-names] [--local] [--resume] [--discover]` | Generate an MCP server with the v2 engine. Without `--auto`/`--custom`, asks which mode. `-q` describes the Custom-mode tool. Reuses the endpoints found by the last build; `--discover` rescans the code (see [Reusing discovered endpoints](#reusing-discovered-endpoints)). |
 | `synapse build --auto [--all-endpoints \| --endpoints <list>]` | Pick Auto-mode endpoints without the interactive picker (for CI). `<list>` is comma-separated `"METHOD /path"`, `/path` or tool names. |
 | `synapse build --auto [--server-name <name>] [--new]` | Rebuilds update the project's existing MCP server (same server id). `--new` creates another server; `--server-name` picks which one. |
 | `synapse build --engine v1 [-q <query>] [-o <file>] [--no-validate] [--no-docs] [-g]` | Legacy v1 engine (hosted, Python only). Needs `synapse analyze` first. |
@@ -457,7 +475,7 @@ The inference provider used by `--local` builds is configured separately — see
 
 With the default v2 engine:
 
-1. **Scan (local).** The CLI detects the project language and extracts HTTP routes (and, in Custom mode, public functions) with tree-sitter. This runs on your machine; the scan can be paused and continued with `--resume`.
+1. **Scan (local).** The CLI detects the project language and extracts HTTP routes (and, in Custom mode, public functions) with tree-sitter. This runs on your machine; the scan can be paused and continued with `--resume`. The result is saved in `.synapse/`, and later builds reuse it until you pass `--discover`.
 2. **Pick.** You choose Auto or Custom, then the endpoints or functions to expose.
 3. **Generate.** Auto mode saves the endpoint config to your Synapse account (hosted) or writes a passthrough server (`--local`). Custom mode sends the extracted manifest and your description to the backend (hosted) or to your model (`--local`), which composes the tool; it is checked and written to your project as a Python file.
 
