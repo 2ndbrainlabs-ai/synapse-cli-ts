@@ -11,6 +11,7 @@
 
 import { resolveApiKey, getBackendConfig } from "../config/manager.js";
 import { ToolExecutor, type ToolResult } from "./tool-executor.js";
+import { readCliVersion, UNKNOWN_CLI_VERSION } from "../utils/version.js";
 
 const MAX_MESSAGE_SIZE = 100 * 1024 * 1024; // 100MB
 
@@ -195,6 +196,19 @@ function sleep(ms: number): Promise<void> {
 // SynapseClient
 // ---------------------------------------------------------------------------
 
+/** gRPC metadata for every call: the API key, plus the CLI version so the
+ *  backend can attribute Build streams to a release (SYN-367). */
+export function callMetadata(
+  grpc: typeof import("@grpc/grpc-js"),
+  apiKey: string,
+): import("@grpc/grpc-js").Metadata {
+  const metadata = new grpc.Metadata();
+  metadata.set("x-api-key", apiKey);
+  const version = readCliVersion();
+  if (version !== UNKNOWN_CLI_VERSION) metadata.set("x-synapse-cli-version", version);
+  return metadata;
+}
+
 export class SynapseClient {
   private host: string;
   private port: number;
@@ -261,8 +275,7 @@ export class SynapseClient {
       };
     }
 
-    const metadata = new grpc.Metadata();
-    metadata.set("x-api-key", apiKey);
+    const metadata = callMetadata(grpc, apiKey);
 
     // Build FunctionInfo proto messages
     const fnProtos = functions.map((fn) => ({
@@ -389,8 +402,7 @@ export class SynapseClient {
 
     const client = new SynapseService(target, credentials, CHANNEL_OPTIONS);
 
-    const metadata = new grpc.Metadata();
-    metadata.set("x-api-key", apiKey);
+    const metadata = callMetadata(grpc, apiKey);
 
     let toolCallCount = 0;
 
@@ -595,8 +607,7 @@ export class SynapseClient {
 
     const client = new SynapseService(target, credentials, CHANNEL_OPTIONS);
 
-    const metadata = new grpc.Metadata();
-    metadata.set("x-api-key", apiKey);
+    const metadata = callMetadata(grpc, apiKey);
 
     return new Promise<BuildResult & { sessionId: string; __transient?: boolean }>((resolve) => {
       let finalResult: BuildResult & { sessionId: string } = {
@@ -786,8 +797,7 @@ export class SynapseClient {
       : grpc.credentials.createInsecure();
 
     const client = new SynapseService(target, credentials, CHANNEL_OPTIONS);
-    const metadata = new grpc.Metadata();
-    metadata.set("x-api-key", apiKey);
+    const metadata = callMetadata(grpc, apiKey);
 
     return new Promise((resolve) => {
       const call = client.Build(metadata);
@@ -958,8 +968,7 @@ export class SynapseClient {
       : grpc.credentials.createInsecure();
 
     const client = new SynapseService(target, credentials, CHANNEL_OPTIONS);
-    const metadata = new grpc.Metadata();
-    metadata.set("x-api-key", apiKey);
+    const metadata = callMetadata(grpc, apiKey);
 
     const timeoutMs = opts.timeoutMs ?? 60_000;
 
@@ -1149,8 +1158,7 @@ export class SynapseClient {
       : grpc.credentials.createInsecure();
 
     const client = new SynapseService(target, credentials, CHANNEL_OPTIONS);
-    const metadata = new grpc.Metadata();
-    metadata.set("x-api-key", apiKey);
+    const metadata = callMetadata(grpc, apiKey);
 
     // A single small, forced-tool-use Haiku call over 1-30 endpoints should
     // resolve in a couple of seconds. This is intentionally much tighter

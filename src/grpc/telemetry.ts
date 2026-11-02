@@ -1,4 +1,4 @@
-import { sha256 } from "../utils/hash.js";
+import { telemetryHash } from "../utils/telemetry-hash.js";
 import { getApiUrl } from "../config/manager.js";
 import { installationId } from "../backend/trace-forwarder.js";
 import { readCliVersion, UNKNOWN_CLI_VERSION } from "../utils/version.js";
@@ -75,6 +75,9 @@ export interface EventOutcome {
   errorCode?: string;
   /** Detected project language, e.g. "python". */
   language?: string;
+  /** The build's session id (ledger file name), to join this event with the
+   *  run's gRPC calls and LLM traces (SYN-367). */
+  sessionId?: string;
 }
 
 export async function trackEvent(
@@ -106,7 +109,7 @@ export async function trackEvent(
     } else {
       payload = {
         event_type: eventType,
-        working_dir_hash: workingDir ? sha256(workingDir) : "",
+        working_dir_hash: workingDir ? telemetryHash(workingDir) : "",
         mode,
         installation_id: installationId(),
       };
@@ -117,6 +120,7 @@ export async function trackEvent(
       if (outcome.success !== undefined) payload.success = outcome.success;
       if (outcome.errorCode && outcome.success === false) payload.error_code = outcome.errorCode;
       if (outcome.language) payload.language = outcome.language;
+      if (outcome.sessionId) payload.session_id = outcome.sessionId;
       const cliVersion = readCliVersion();
       if (cliVersion !== UNKNOWN_CLI_VERSION) payload.cli_version = cliVersion;
     }

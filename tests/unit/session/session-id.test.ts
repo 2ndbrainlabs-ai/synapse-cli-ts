@@ -8,6 +8,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { newSessionId } from "../../../src/session/session-id.js";
+import { telemetryHash } from "../../../src/utils/telemetry-hash.js";
 import { Ledger, findResumable, getLedgerPath } from "../../../src/session/ledger.js";
 
 const REPO_HASH = "368b26fc".padEnd(64, "0");
@@ -17,9 +18,16 @@ describe("newSessionId", () => {
     vi.restoreAllMocks();
   });
 
-  it("keeps the readable sess_<hash8>_<ts36> prefix and adds a random suffix", () => {
+  it("keeps the readable sess_<tag8>_<ts36> prefix and adds a random suffix", () => {
     const id = newSessionId(REPO_HASH);
-    expect(id).toMatch(/^sess_368b26fc_[0-9a-z]+_[0-9a-f]{6}$/);
+    const tag = telemetryHash(REPO_HASH).slice(0, 8);
+    expect(id).toMatch(new RegExp(`^sess_${tag}_[0-9a-z]+_[0-9a-f]{6}$`));
+  });
+
+  it("does not expose the unsalted repo hash, which is sent with telemetry (SYN-367)", () => {
+    expect(newSessionId(REPO_HASH)).not.toContain("368b26fc");
+    // Same repo, same machine: same tag.
+    expect(newSessionId(REPO_HASH).split("_")[1]).toBe(newSessionId(REPO_HASH).split("_")[1]);
   });
 
   it("gives distinct ids to runs started in the same millisecond", () => {

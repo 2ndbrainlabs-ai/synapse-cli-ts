@@ -12,7 +12,7 @@
 
 import os from "node:os";
 import { getApiUrl } from "../config/manager.js";
-import { sha256 } from "../utils/hash.js";
+import { telemetryHash } from "../utils/telemetry-hash.js";
 
 export interface LlmTraceRecord {
   installation_id: string;
@@ -44,7 +44,8 @@ export function installationId(): string {
   if (_installationId) return _installationId;
   const host = os.hostname();
   const user = os.userInfo().username;
-  _installationId = sha256(`${host}@${user}`);
+  // Keyed with the per-install salt, so it can't be guessed (SYN-367).
+  _installationId = telemetryHash(`${host}@${user}`);
   return _installationId;
 }
 

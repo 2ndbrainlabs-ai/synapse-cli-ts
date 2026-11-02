@@ -247,6 +247,14 @@ describe("v2 hosted build: lines quota (SYN-315)", () => {
     expect(process.exitCode).toBeUndefined();
   });
 
+  it("tags the lines charge and the build event with the run's session_id (SYN-367)", async () => {
+    await runBuildV2({ auto: true });
+
+    const sessionId = events("analyze")[0].body?.session_id;
+    expect(sessionId).toMatch(/^sess_[0-9a-f]{8}_[0-9a-z]+_[0-9a-f]{6}$/);
+    expect((await buildEvent()).session_id).toBe(sessionId);
+  });
+
   it("sends no analyze event on a rebuild with no changes", async () => {
     await runBuildV2({ auto: true });
     fetchMock.mockClear();

@@ -180,7 +180,7 @@ describe("synapse build exit codes", () => {
     expect(candidateCount).toBe(1);
     expect(typeof durationMs).toBe("number");
     expect(mode).toBe("hosted");
-    expect(outcome).toEqual({ success: false, errorCode: "SERVER_ERROR", language: "python" });
+    expect(outcome).toEqual({ success: false, errorCode: "SERVER_ERROR", language: "python", sessionId: expect.stringMatching(/^sess_/) });
   });
 
   it("exits non-zero with the invalid-key message on gRPC UNAUTHENTICATED", async () => {
@@ -242,7 +242,7 @@ describe("synapse build exit codes", () => {
     expect(fs.existsSync(path.join(project, "risk_server.py"))).toBe(true);
     const [toolCount, , , , outcome] = await buildEvent();
     expect(toolCount).toBe(1);
-    expect(outcome).toEqual({ success: true, errorCode: undefined, language: "python" });
+    expect(outcome).toEqual({ success: true, errorCode: undefined, language: "python", sessionId: expect.stringMatching(/^sess_/) });
   });
 
   it("reports a custom build whose verify checks failed as VERIFY_FAILED, still exiting 0", async () => {
@@ -260,7 +260,7 @@ describe("synapse build exit codes", () => {
     expect(fs.existsSync(path.join(project, "risk_server.py"))).toBe(true);
     const [toolCount, , , , outcome] = await buildEvent();
     expect(toolCount).toBe(1);
-    expect(outcome).toEqual({ success: false, errorCode: "VERIFY_FAILED", language: "python" });
+    expect(outcome).toEqual({ success: false, errorCode: "VERIFY_FAILED", language: "python", sessionId: expect.stringMatching(/^sess_/) });
   });
 
   it("sends the UNEXPECTED event before rethrowing a crash", async () => {

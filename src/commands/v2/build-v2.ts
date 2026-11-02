@@ -93,6 +93,8 @@ function parseMaxTimeMs(opts: BuildV2Options): number {
 /** What runBuildV2 needs to report the outcome, filled in as the build runs. */
 interface BuildContext {
   apiKey: string;
+  /** This run's session id, sent with its telemetry events (SYN-367). */
+  sessionId?: string;
   effectiveMode: "hosted" | "local";
   language?: string;
   report: BuildReport;
@@ -185,7 +187,7 @@ async function sendBuildTelemetry(
         ctx.report.candidateCount,
         durationMs,
         ctx.effectiveMode,
-        { success: !errorCode, errorCode, language: ctx.language },
+        { success: !errorCode, errorCode, language: ctx.language, sessionId: ctx.sessionId },
       ),
     )
     .then(() => {})
@@ -312,6 +314,7 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
     }
     sessionId = newSessionId(repoHash);
   }
+  ctx.sessionId = sessionId;
 
   // ---------------------------------------------------------------------------
   // Mode: Auto vs Custom — needed to decide whether to include function needles.
@@ -437,6 +440,7 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
         workingDir,
         synapseDir: getProjectSynapseDir(workingDir),
         totalLines: manifest.lines_scanned ?? 0,
+        outcome: { sessionId },
       });
     } catch {
       /* fail open — accounting must never crash the build */
