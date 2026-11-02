@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.1.8](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/compare/v0.1.7...v0.1.8) (2026-11-02)
+
+
+### Bug Fixes
+
+* **build:** check custom-mode language before charging lines (SYN-366) ([#52](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/issues/52)) ([92ac67b](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/commit/92ac67b55f0c5c0c478b617aeb6af47709554edc))
+* **build:** detect Go repos as Go and extract their routes (SYN-353) ([#49](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/issues/49)) ([f66b5ed](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/commit/f66b5ede9c17263838ac3be1e7cc2186d6b9c612))
+* **telemetry:** add session_id and CLI version, salt hashed ids; installation_id changes once on upgrade (SYN-367) ([#53](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/issues/53)) ([4a7bdea](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/commit/4a7bdea549b73a0231fadf48e81b986ef106d9b7))
+* **telemetry:** send failure build events before exit (SYN-365) ([#51](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/issues/51)) ([876f191](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/commit/876f19190a7eb6ef436ebd3a06581388abf93ca7))
+
 ## [0.1.7](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/compare/v0.1.6...v0.1.7) (2026-11-01)
 
 
