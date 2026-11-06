@@ -1,3 +1,16 @@
+# Secrets and local credentials: never commit (see docs/security.md)
+.env.*
+!.env.example
+*.pem
+*.key
+*-key.json
+*credentials*.json
+
+# Personal agent settings
+.claude/settings.local.json
+CLAUDE.local.md
+AGENTS.local.md
+
 node_modules/
 dist/
 *.tsbuildinfo
