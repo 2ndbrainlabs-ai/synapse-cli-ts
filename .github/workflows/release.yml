@@ -30,6 +30,8 @@ jobs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
       version: ${{ steps.release.outputs.version }}
+      prs_created: ${{ steps.release.outputs.prs_created }}
+      pr: ${{ steps.release.outputs.pr }}
     steps:
       - name: Run release-please
         id: release
@@ -37,6 +39,28 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+  # main requires CI and "Validate PR title" to pass before a merge. The release
+  # PR is pushed with GITHUB_TOKEN, which starts no pull_request runs, so start
+  # those checks on the release branch here (workflow_dispatch is the one event
+  # GITHUB_TOKEN may trigger). The results attach to the release PR's head commit.
+  release-pr-checks:
+    name: Run checks on the release PR
+    needs: release-please
+    if: needs.release-please.outputs.prs_created == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Dispatch CI and PR title check
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ fromJSON(needs.release-please.outputs.pr).headBranchName }}
+          PR_NUMBER: ${{ fromJSON(needs.release-please.outputs.pr).number }}
+        run: |
+          gh workflow run ci.yml --ref "$BRANCH"
+          gh workflow run conventional-commits.yml --ref "$BRANCH" -f pr="$PR_NUMBER"
 
   publish:
     name: Publish to npm
