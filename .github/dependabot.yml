@@ -8,6 +8,9 @@ multi-ecosystem-groups:
   all-dependencies:
     schedule:
       interval: weekly
+    open-pull-requests-limit: 5
+    # commit-message and open-pull-requests-limit may only be set here, not on
+    # the ecosystems that join this group (Dependabot rejects the config).
     # Conventional Commit prefix so PR titles pass the "Validate PR title"
     # check. Dependabot appends ": " after a prefix that ends in ")".
     commit-message:
@@ -20,13 +23,9 @@ updates:
     multi-ecosystem-group: all-dependencies
     patterns:
       - "*"
-    open-pull-requests-limit: 5
     # Let new releases age a week before proposing them (supply-chain hygiene).
     cooldown:
       default-days: 7
-    commit-message:
-      prefix: "chore(deps)"
-      prefix-development: "chore(deps-dev)"
     ignore:
       # The CLI supports Node >= 20 (package.json "engines"; CI tests 20, 22
       # and 24). These majors would break that floor, so stay on the current
@@ -53,8 +52,5 @@ updates:
     multi-ecosystem-group: all-dependencies
     patterns:
       - "*"
-    open-pull-requests-limit: 5
     cooldown:
       default-days: 7
-    commit-message:
-      prefix: "chore(deps)"
