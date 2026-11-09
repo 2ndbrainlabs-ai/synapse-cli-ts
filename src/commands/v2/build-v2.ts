@@ -19,8 +19,6 @@
 // Exit status (SYN-314): every failed, aborted or paused build exits non-zero.
 // Flows throw BuildFailure after showing the error; runBuildV2 sets
 // process.exitCode and sends one `build` telemetry event with the outcome.
-//
-// Keeps v1 (`runBuild` in ../build.ts) untouched for backwards compat.
 
 import {
   isInitialized,
@@ -277,7 +275,7 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
     apiKey = resolved;
     ctx.apiKey = apiKey;
 
-    // Pre-flight quota check (mirrors v1 build.ts). Fails open: an
+    // Pre-flight quota check. Fails open: an
     // unreachable quota endpoint never blocks the build. Runs even with
     // SYNAPSE_TELEMETRY=0 — that flag only turns off analytics events.
     // The block is thrown outside the try so the fail-open catch can't
@@ -517,8 +515,7 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
   // ---------------------------------------------------------------------------
   // Lines-indexed quota (hosted only — local builds never count against it).
   // Send the lines above the repo's baseline (shared with `synapse analyze`,
-  // so lines already charged there are not charged again), BEFORE any
-  // code generation, so a 429 stops the build. Other failures (401, 5xx,
+  // so lines already charged there are not charged again), BEFORE any code generation, so a 429 stops the build. Other failures (401, 5xx,
   // timeout) fail open: the build continues and the same lines are resent
   // next time because the baseline only moves on success (SYN-315).
   // A reused discovery cache carries the lines_scanned of the scan that made

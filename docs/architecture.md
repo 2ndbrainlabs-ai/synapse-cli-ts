@@ -15,19 +15,19 @@ How the CLI is put together. Terms are defined in [CONTEXT.md](../CONTEXT.md); w
 | Command | Module |
 | --- | --- |
 | `init` | `src/commands/init.ts` |
-| `build` (v2, default) | `src/commands/v2/build-v2.ts` |
-| `build --engine v1`, `analyze` | `src/commands/build.ts`, `src/commands/analyze.ts` (legacy) |
+| `build` (v2) | `src/commands/v2/build-v2.ts` |
+| `analyze` | `src/commands/analyze.ts` (Python scan for `info` stats and indexed-lines reporting) |
 | `config`, `config set-key / keys / revoke` | `src/commands/config.ts` |
 | `model`, `model list / set / reset` | `src/commands/model.ts` |
 | `info`, `logs`, `update`, `uninstall` | `src/commands/<name>.ts` |
 
 ## Build engines
 
-- **v2 (the default):** `src/commands/v2/build-v2.ts`. Runs surface extraction, then one of two tracks:
+- **v2 (the only engine):** `src/commands/v2/build-v2.ts`. Runs surface extraction, then one of two tracks:
   - **Auto** (`auto-flow.ts` hosted, `local-auto-flow.ts` for `--local`, which needs no model unless `--smart-names` is set): exposes the project's HTTP endpoints as tools.
   - **Custom** (`custom-flow.ts`): composes internal functions into one tool file written to the project root, and merges the env vars it needs into `.env.example`.
   - `mode-picker.ts` and `endpoint-picker.ts` handle the interactive choices; `build-outcome.ts` maps results to exit codes.
-- **v1 (legacy):** `--engine v1` → `src/commands/build.ts`, plus `synapse analyze`. A backend-driven agent loop that asks the CLI to run file tools (`src/tools/*`) over a bidirectional gRPC stream. Kept for backwards compatibility; don't add features to it. Its removal is being proposed separately.
+- **v1 (removed, SYN-257):** the legacy agent-loop engine is gone. `--engine v1` and its v1-only flags (`-o`, `-g`, `--no-validate`, `--no-docs`) are hidden and print a removal message (`src/commands/removed.ts`). `synapse analyze` stays.
 
 ## Hosted vs local: one client interface
 

@@ -18,7 +18,7 @@ The words this repo uses for its domain. Use these terms in code, tests, issues 
 | Term | Meaning |
 | --- | --- |
 | **v2 engine** | The default build engine (`src/commands/v2/`): local surface extraction, then the Auto or Custom track. |
-| **v1 engine** | The legacy agent-loop engine (`--engine v1`, with `synapse analyze`). Kept for backwards compatibility only; don't build on it. |
+| **v1 engine** | The legacy agent-loop engine, removed in SYN-257. `--engine v1` now prints a removal message. `synapse analyze` is not part of it and stays. |
 | **Auto track** / **Auto mode** | Exposes the project's existing HTTP endpoints as tools. Hosted: saved to the user's account and served by the runner. `--local`: a passthrough server file, no model call needed. |
 | **Custom track** / **Custom mode** | Composes internal functions into one tool from a workflow description (`-q`), written to the project root as a Python file. |
 | **Hosted mode** | A build that uses the Synapse backend. Needs a Synapse API key and counts against quota. The default. |
