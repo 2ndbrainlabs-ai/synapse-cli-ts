@@ -1,31 +1,60 @@
 version: 2
+
+# All dependency updates (npm and GitHub Actions) arrive as ONE weekly PR via a
+# multi-ecosystem group. Each ecosystem below opts in with
+# `multi-ecosystem-group` and `patterns: ["*"]` (every dependency, every update
+# type: major, minor and patch).
+multi-ecosystem-groups:
+  all-dependencies:
+    schedule:
+      interval: weekly
+    # Conventional Commit prefix so PR titles pass the "Validate PR title"
+    # check. Dependabot appends ": " after a prefix that ends in ")".
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+
 updates:
   - package-ecosystem: npm
     directory: /
-    schedule:
-      interval: weekly
+    multi-ecosystem-group: all-dependencies
+    patterns:
+      - "*"
     open-pull-requests-limit: 5
     # Let new releases age a week before proposing them (supply-chain hygiene).
     cooldown:
       default-days: 7
-    groups:
-      # All minor and patch bumps land in one PR; majors stay separate PRs.
-      npm-minor-patch:
-        applies-to: version-updates
-        update-types:
-          - minor
-          - patch
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    ignore:
+      # The CLI supports Node >= 20 (package.json "engines"; CI tests 20, 22
+      # and 24). These majors would break that floor, so stay on the current
+      # major until the floor is raised:
+      # - @types/node: track the oldest supported runtime (20.x); newer majors
+      #   describe APIs Node 20 lacks and break `npm run typecheck`.
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # - google-auth-library 11 requires Node >= 22.
+      - dependency-name: "google-auth-library"
+        update-types: ["version-update:semver-major"]
+      # - vitest 5 requires Node >= 22.12 (and a separate `vite` peer).
+      - dependency-name: "vitest"
+        update-types: ["version-update:semver-major"]
+      # tree-sitter-c-sharp >= 0.23.5 is an ES module with top-level await, so
+      # the synchronous require() in src/extractors/languages/csharp-parse.ts
+      # cannot load it. It is pinned to 0.23.1 until that loader moves to
+      # import().
+      - dependency-name: "tree-sitter-c-sharp"
+        versions: [">= 0.23.5"]
 
   - package-ecosystem: github-actions
     directory: /
-    schedule:
-      interval: weekly
+    multi-ecosystem-group: all-dependencies
+    patterns:
+      - "*"
     open-pull-requests-limit: 5
     cooldown:
       default-days: 7
-    groups:
-      # Every action bump lands in one PR.
-      github-actions:
-        applies-to: version-updates
-        patterns:
-          - "*"
+    commit-message:
+      prefix: "chore(deps)"
