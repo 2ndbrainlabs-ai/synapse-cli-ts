@@ -7,6 +7,10 @@ on:
   pull_request:
     branches:
       - main
+  # release-please opens its release PR with GITHUB_TOKEN, which does not start
+  # pull_request runs. release.yml dispatches this workflow on the release
+  # branch instead, so the required checks still run on the release PR.
+  workflow_dispatch:
 
 # Least privilege: every job only reads the repository.
 permissions:

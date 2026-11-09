@@ -86,8 +86,29 @@ These steps need owner or admin access and are not done by any PR.
    issues, PRs or commits. When `NPM_TOKEN` is unset, the workflow uses OIDC.
 
 Note: pull requests opened by release-please with the default `GITHUB_TOKEN` do
-not trigger other workflows (for example CI) on the release PR. That is
-acceptable because the publish job runs `npm run ci` itself on the tag.
+not trigger `pull_request` workflows. Because `main` requires CI to pass (see
+"Branch protection on `main`" below), the `release-pr-checks` job in
+`release.yml` dispatches `ci.yml` and `conventional-commits.yml` on the release
+branch each time release-please opens or updates the release PR. The publish
+job also runs `npm run ci` itself on the tag.
+
+## Branch protection on `main`
+
+`main` cannot be merged into unless these checks pass on the PR's latest commit
+(names as the jobs report them):
+
+| Check | Workflow |
+| --- | --- |
+| `Unit Tests (Node 20)`, `Unit Tests (Node 22)`, `Unit Tests (Node 24)` | `ci.yml` |
+| `Lint` | `ci.yml` |
+| `Integration Checks` | `ci.yml` |
+| `Security Audit` | `ci.yml` |
+| `Validate PR title` | `conventional-commits.yml` |
+
+The branch must also be up to date with `main`, and a code owner must approve.
+This is a repository setting (Settings -> Branches), not a file. If you rename
+a job or change the Node matrix, update the required checks in the same change,
+or every PR will wait on a check that never reports.
 
 ## Common tasks
 

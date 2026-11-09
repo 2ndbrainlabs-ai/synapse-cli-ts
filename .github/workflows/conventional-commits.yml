@@ -7,6 +7,15 @@ on:
       - edited
       - synchronize
       - reopened
+  # release-please opens its release PR with GITHUB_TOKEN, which does not start
+  # pull_request runs. release.yml dispatches this workflow with the PR number
+  # so "Validate PR title" (a required check on main) still reports on it.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: Number of the pull request whose title to validate
+        required: true
+        type: number
 
 permissions:
   pull-requests: read
@@ -16,7 +25,8 @@ jobs:
     name: Validate PR title
     runs-on: ubuntu-latest
     steps:
-      - uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
+      - if: github.event_name == 'pull_request'
+        uses: amannn/action-semantic-pull-request@48f256284bd46cdaab1048c3721360e808335d50 # v6.1.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
@@ -36,3 +46,25 @@ jobs:
           subjectPatternError: |
             The subject "{subject}" must start with a lowercase letter.
             Example: feat(cli): add --smart-names flag
+
+      # Same rules as the step above, for dispatched runs (that action needs a
+      # pull_request event). Also checks that the PR's head is the commit this
+      # run reports on, so the result lands on the right commit.
+      - if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          PR: ${{ inputs.pr }}
+          RUN_SHA: ${{ github.sha }}
+        run: |
+          HEAD_SHA="$(gh pr view "$PR" --json headRefOid --jq .headRefOid)"
+          TITLE="$(gh pr view "$PR" --json title --jq .title)"
+          echo "PR #$PR: $TITLE"
+          if [ "$HEAD_SHA" != "$RUN_SHA" ]; then
+            echo "::error::PR #$PR head is $HEAD_SHA, but this run is for $RUN_SHA"
+            exit 1
+          fi
+          if ! printf '%s' "$TITLE" | grep -Pq '^(feat|fix|docs|chore|refactor|test|ci|perf|build|revert)(\([^)]+\))?!?: (?![A-Z]).+$'; then
+            echo "::error::PR title is not a Conventional Commit with a lowercase subject: $TITLE"
+            exit 1
+          fi
