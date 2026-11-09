@@ -35,3 +35,7 @@ export function getVectorStorePath(workingDir: string): string {
 export function getContextMdPath(workingDir: string): string {
   return path.join(getProjectSynapseDir(workingDir), "CONTEXT.md");
 }
+
+export function getSurfaceCachePath(workingDir: string): string {
+  return path.join(getProjectSynapseDir(workingDir), "surface_cache.json");
+}
