@@ -5,9 +5,27 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # Let new releases age a week before proposing them (supply-chain hygiene).
+    cooldown:
+      default-days: 7
+    groups:
+      # All minor and patch bumps land in one PR; majors stay separate PRs.
+      npm-minor-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
+    groups:
+      # Every action bump lands in one PR.
+      github-actions:
+        applies-to: version-updates
+        patterns:
+          - "*"

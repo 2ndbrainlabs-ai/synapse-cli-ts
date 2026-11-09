@@ -1,16 +1,33 @@
 # Security Policy
 
-We take security seriously.
+We take security seriously. Thank you for helping keep Synapse and its users safe.
 
 ## Reporting a Vulnerability
 
-If you discover a security issue or a bug that could have security implications, please **[open an issue on GitHub](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/issues/new/choose)** and tag it with the `security` label.
+**Please do not report security vulnerabilities through public GitHub issues, discussions or pull requests.**
 
-For sensitive reports that should not be public, email **security@2ndbrainlabs.ai** instead. We aim to acknowledge reports within 72 hours.
+Report them privately instead:
+
+1. **Preferred: GitHub private vulnerability reporting.** Open a draft advisory at **[Report a vulnerability](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/security/advisories/new)** (also reachable from the repository's **Security** tab). Only you and the maintainers can see it.
+2. **Fallback: email [security@2ndbrainlabs.ai](mailto:security@2ndbrainlabs.ai)** if you cannot use GitHub's private reporting.
+
+Please include, where you can:
+
+- the affected version (`synapse --version`) and your OS and Node.js version,
+- a description of the issue and its impact,
+- steps to reproduce or a proof of concept,
+- any suggested fix or mitigation.
+
+We aim to acknowledge reports within 72 hours, keep you updated while we investigate, and credit you in the advisory once a fix is released (unless you prefer to stay anonymous). Please give us a reasonable chance to fix the issue before disclosing it publicly.
 
 ## Supported Versions
 
-Only the latest published release on npm is supported for security fixes.
+Only the latest published release of `@2ndbrainlabs-ai/synapse-cli` on npm receives security fixes.
+
+| Version         | Supported |
+| --------------- | --------- |
+| Latest release  | Yes       |
+| Older releases  | No        |
 
 ## Scope
 

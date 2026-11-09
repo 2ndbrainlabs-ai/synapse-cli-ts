@@ -6,7 +6,7 @@
 // request and response bodies are the same contract, so there is one
 // implementation rather than six.
 //
-// Uses global fetch (Node >= 18, matching package.json engines) instead of the
+// Uses global fetch (Node >= 20, matching package.json engines) instead of the
 // `openai` SDK: the call is a single non-streaming POST, retry/backoff already
 // lives in backend/llm-call.ts, and no new dependency means a custom endpoint
 // works with nothing but a URL.

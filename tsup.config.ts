@@ -8,7 +8,7 @@ export default defineConfig([
   {
     entry: ["src/index.ts"],
     format: ["esm"],
-    target: "node18",
+    target: "node20",
     outDir: "dist",
     clean: true,
     splitting: true,
@@ -20,7 +20,7 @@ export default defineConfig([
   {
     entry: { "parse-worker": "src/extractors/core/parse-worker.ts" },
     format: ["esm"],
-    target: "node18",
+    target: "node20",
     outDir: "dist",
     clean: false,
     splitting: false,
