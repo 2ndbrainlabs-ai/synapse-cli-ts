@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(npm run lint)",
+      "Bash(npm run typecheck)",
+      "Bash(npm run typecheck:tests)",
+      "Bash(npm test)",
+      "Bash(npm run test:*)",
+      "Bash(npm run build)",
+      "Bash(npm run ci)",
+      "Bash(npx vitest run:*)",
+      "Bash(npm pack --dry-run)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./**/.env)",
+      "Read(./**/.env.*)",
+      "Read(./**/*.pem)",
+      "Read(./**/*.key)",
+      "Read(./**/*credentials*.json)",
+      "Read(./**/*-key.json)",
+      "Read(~/.npmrc)",
+      "Read(~/.synapse/config.json)",
+      "Read(./**/.synapse/config.json)",
+      "Read(~/.synapse/telemetry-salt)",
+      "Read(~/.aws/credentials)",
+      "Read(~/.config/gcloud/**)"
+    ]
+  }
+}
