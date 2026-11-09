@@ -107,7 +107,11 @@ describe("detectLanguage", () => {
 
 describe("extractSurfaceStreamed on a multi-language Go repo", () => {
   it("runs the Go extractor and finds the Go routes", async () => {
-    const session = { signal: new AbortController().signal } as unknown as SessionManager;
+    const session = {
+      signal: new AbortController().signal,
+      resume: { scanned: new Map() },
+      append: () => {},
+    } as unknown as SessionManager;
     const manifest = await extractSurfaceStreamed({ workingDir: giteaLike(), session });
 
     expect(manifest.language).toBe("go");

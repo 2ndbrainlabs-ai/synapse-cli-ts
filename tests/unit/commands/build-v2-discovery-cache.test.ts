@@ -33,7 +33,11 @@ vi.mock("../../../src/commands/v2/auto-flow.js", () => ({ runAutoFlow: flows.run
 vi.mock("../../../src/commands/v2/local-auto-flow.js", () => ({
   runLocalAutoFlow: flows.runLocalAutoFlow,
 }));
-vi.mock("../../../src/commands/v2/custom-flow.js", () => ({ runCustomFlow: flows.runCustomFlow }));
+vi.mock("../../../src/commands/v2/custom-flow.js", async (importOriginal) => ({
+  // Keep the real SYN-366 language check; only the codegen flow is stubbed.
+  ...(await importOriginal<typeof import("../../../src/commands/v2/custom-flow.js")>()),
+  runCustomFlow: flows.runCustomFlow,
+}));
 
 const extractor = vi.hoisted(() => ({ spy: undefined as unknown as ReturnType<typeof vi.fn> }));
 vi.mock("../../../src/extractors/core/extractor.js", async (importOriginal) => {
