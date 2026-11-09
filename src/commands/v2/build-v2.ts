@@ -10,6 +10,12 @@
 //   - `--resume` picks the most recent unfinished ledger for this repo and
 //     replays its SHA cache, so we re-parse only files whose bytes changed
 //
+// Discovery cache (SYN-8): the first build in a repo discovers and saves the
+// result to `.synapse/surface_cache.json`. Later builds reuse it without
+// scanning and print when it was discovered; `--discover` rescans (re-parsing
+// only files whose bytes changed) and refreshes it. `--resume` wins over the
+// cache: it finishes the unfinished session's scan, then refreshes the cache.
+//
 // Exit status (SYN-314): every failed, aborted or paused build exits non-zero.
 // Flows throw BuildFailure after showing the error; runBuildV2 sets
 // process.exitCode and sends one `build` telemetry event with the outcome.
@@ -23,6 +29,7 @@ import {
 } from "../../config/manager.js";
 import { resolveLlm, type ResolvedLlm } from "../../config/llm-config.js";
 import { extractSurfaceStreamed } from "../../extractors/core/extractor.js";
+import type { SurfaceManifest } from "../../extractors/core/surface-manifest.js";
 import { pickBuildMode, type BuildMode } from "./mode-picker.js";
 import { runAutoFlow } from "./auto-flow.js";
 import { runLocalAutoFlow } from "./local-auto-flow.js";
@@ -47,6 +54,16 @@ import {
   showQuotaExceeded,
   type LinesReport,
 } from "../shared/lines-delta.js";
+import {
+  buildSurfaceCache,
+  cacheToManifest,
+  cacheToResumeScanned,
+  formatDiscoveredAt,
+  isCacheUsable,
+  readSurfaceCache,
+  surfaceCacheKey,
+  writeSurfaceCache,
+} from "../../session/surface-cache.js";
 
 export interface BuildV2Options {
   auto?: boolean;
@@ -83,6 +100,8 @@ export interface BuildV2Options {
   endpoints?: string;
   /** Auto (hosted): create a new server instead of updating this repo's one. */
   newServer?: boolean;
+  /** Re-scan for new/changed files instead of reusing the last discovery result. */
+  discover?: boolean;
 }
 
 function parseMaxTimeMs(opts: BuildV2Options): number {
@@ -281,6 +300,8 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
 
   const repoHash = computeRepoHash(workingDir);
   const maxTimeMs = parseMaxTimeMs(opts);
+  const cacheKey = surfaceCacheKey(workingDir);
+  const surfaceCache = readSurfaceCache(workingDir, cacheKey);
 
   // ---------------------------------------------------------------------------
   // Resume attempt — pick the most recent unfinished session for this repo.
@@ -350,70 +371,139 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
     resumeFrom: resumeState,
   });
 
-  const spinner = new Spinner("orbital");
-  spinner.start("Scanning codebase");
-  session.onProgress((p) => {
-    spinner.updateMeta({
-      extra: `${p.filesSeen} scanned · ${p.filesMatched} matched · ${p.endpointsFound} ep · ${p.functionsFound} fn`,
-    });
-  });
+  // Precedence: --resume (finish the unfinished scan) > --discover (rescan)
+  // > a usable cache (reuse, no scan) > first-time discovery.
+  const captureFunctions = mode === "custom";
+  const cacheCompatible = !!surfaceCache && (!captureFunctions || surfaceCache.captured_functions);
+  const skipDiscovery =
+    !opts.resume && !opts.discover && isCacheUsable(surfaceCache, captureFunctions);
 
-  let manifest: Awaited<ReturnType<typeof extractSurfaceStreamed>>;
-  ctx.extracting = true;
-  try {
-    manifest = await extractSurfaceStreamed({
-      workingDir,
-      session,
-      captureFunctions: mode === "custom",
+  let manifest: SurfaceManifest;
+
+  if (skipDiscovery) {
+    // Fast path: reuse the last completed discovery result untouched — no
+    // prefilter scan, no parsing. Pass --discover to force a re-scan.
+    // Source changes since then are not picked up (that would need the scan
+    // this skips); the hint tells the user how to rescan.
+    manifest = cacheToManifest(surfaceCache!, { captureFunctions });
+    // Close the session right away: nothing to resume, and an open ledger
+    // would show up as "resumable" on the next build.
+    session.markDone(manifest.endpoints.length, manifest.functions.length);
+    // Nothing to pause from here on: Ctrl-C cancels the build (SYN-365).
+    session.releaseSigint();
+    stepOk("Session", sessionId);
+    const found = captureFunctions
+      ? `${manifest.endpoints.length} endpoint(s), ${manifest.functions.length} function(s)`
+      : `${manifest.endpoints.length} endpoint(s)`;
+    stepInfo(
+      "Discover",
+      `Using the endpoints discovered on ${formatDiscoveredAt(surfaceCache!.updated_at)} (${found}). ` +
+        `Run ${t.cmd("synapse build --discover")} to rescan.`,
+    );
+    stepInfo(
+      "Language",
+      `${manifest.language}${manifest.framework ? ` / ${manifest.framework}` : ""}`,
+    );
+  } else {
+    if (!opts.resume && surfaceCache) {
+      if (cacheCompatible) {
+        // Seed the same SHA-based skip/merge cache the streamed extractors
+        // already consult for `--resume` — files whose bytes are unchanged
+        // are replayed from the cache instead of re-parsed.
+        for (const [relPath, record] of cacheToResumeScanned(surfaceCache)) {
+          session.resume.scanned.set(relPath, record);
+        }
+      } else {
+        stepInfo(
+          "Discover",
+          "Cached discovery doesn't include function data needed for Custom mode — running a full scan.",
+        );
+      }
+    }
+
+    const spinner = new Spinner("orbital");
+    spinner.start("Scanning codebase");
+    session.onProgress((p) => {
+      spinner.updateMeta({
+        extra: `${p.filesSeen} scanned · ${p.filesMatched} matched · ${p.endpointsFound} ep · ${p.functionsFound} fn`,
+      });
     });
-  } catch (e) {
+
+    let extracted: Awaited<ReturnType<typeof extractSurfaceStreamed>>;
+    ctx.extracting = true;
+    try {
+      extracted = await extractSurfaceStreamed({
+        workingDir,
+        session,
+        captureFunctions,
+      });
+    } catch (e) {
+      ctx.extracting = false;
+      spinner.fail("Extraction failed", String(e));
+      session.recordError({
+        code: "EXTRACTOR_FAILED",
+        stage: "extract",
+        message: "Couldn't extract the codebase surface.",
+        technical: String(e),
+        hint: "Check that the repo has valid source in a supported language (Python, TypeScript, Java, C#, Go, Rust). If this repeats, share the ledger via `synapse logs`.",
+      });
+      session.dispose();
+      throw new BuildFailure(OUTCOME_CODES.EXTRACTOR_FAILED);
+    }
+
     ctx.extracting = false;
-    spinner.fail("Extraction failed", String(e));
-    session.recordError({
-      code: "EXTRACTOR_FAILED",
-      stage: "extract",
-      message: "Couldn't extract the codebase surface.",
-      technical: String(e),
-      hint: "Check that the repo has valid source in a supported language (Python, TypeScript, Java, C#, Go, Rust). If this repeats, share the ledger via `synapse logs`.",
+    // Ctrl-C from here on cancels the build (runBuildV2's handler); the
+    // session's own handler would only abort a classify call mid-flight.
+    session.releaseSigint();
+
+    if (session.aborted) {
+      // Session was paused (sigint or time_cap). Report gracefully.
+      spinner.complete("Scan paused — partial results captured");
+      const stats = (extracted as any).stats ?? {};
+      const filesParsed = stats.filesParsed ?? 0;
+      const filesSeen = stats.filesSeen ?? 0;
+      roundedBox("Session Paused", "⚠", t.warn, [
+        `Scanned ${filesParsed} / ${filesSeen} matched files before pause.`,
+        `${extracted.endpoints.length} endpoint(s) and ${extracted.functions.length} function(s) captured.`,
+        "",
+        `Resume with: ${t.cmd("synapse build --resume")}`,
+      ]);
+      session.dispose();
+      throw new BuildFailure(OUTCOME_CODES.SESSION_PAUSED);
+    }
+
+    manifest = extracted;
+    // Framework comes from parse hits; if every file was unchanged and
+    // replayed from the cache, nothing was parsed, so keep the cached one.
+    if (!manifest.framework && cacheCompatible && !opts.resume) {
+      manifest.framework = surfaceCache!.framework;
+    }
+
+    spinner.complete(
+      `Extracted ${manifest.endpoints.length} endpoint(s) and ${manifest.functions.length} function(s)`,
+    );
+    stepOk("Session", sessionId);
+
+    stepInfo(
+      "Language",
+      `${manifest.language}${manifest.framework ? ` / ${manifest.framework}` : ""}`,
+    );
+
+    // Persist the discovery result so future `synapse build` runs can skip
+    // this step entirely until `--discover` is passed again.
+    const nextCache = buildSurfaceCache({
+      repoHash: cacheKey,
+      manifest,
+      ledgerRecords: readLedger(workingDir, sessionId),
+      previous: surfaceCache,
+      captureFunctions,
     });
-    session.dispose();
-    throw new BuildFailure(OUTCOME_CODES.EXTRACTOR_FAILED);
+    writeSurfaceCache(workingDir, nextCache);
   }
-
-  ctx.extracting = false;
-  // Ctrl-C from here on cancels the build (runBuildV2's handler); the
-  // session's own handler would only abort a classify call mid-flight.
-  session.releaseSigint();
-
-  if (session.aborted) {
-    // Session was paused (sigint or time_cap). Report gracefully.
-    spinner.complete("Scan paused — partial results captured");
-    const stats = (manifest as any).stats ?? {};
-    const filesParsed = stats.filesParsed ?? 0;
-    const filesSeen = stats.filesSeen ?? 0;
-    roundedBox("Session Paused", "⚠", t.warn, [
-      `Scanned ${filesParsed} / ${filesSeen} matched files before pause.`,
-      `${manifest.endpoints.length} endpoint(s) and ${manifest.functions.length} function(s) captured.`,
-      "",
-      `Resume with: ${t.cmd("synapse build --resume")}`,
-    ]);
-    session.dispose();
-    throw new BuildFailure(OUTCOME_CODES.SESSION_PAUSED);
-  }
-
-  spinner.complete(
-    `Extracted ${manifest.endpoints.length} endpoint(s) and ${manifest.functions.length} function(s)`,
-  );
-  stepOk("Session", sessionId);
   ctx.language = manifest.language;
 
-  stepInfo(
-    "Language",
-    `${manifest.language}${manifest.framework ? ` / ${manifest.framework}` : ""}`,
-  );
-
   // Custom mode supports Python only. Check before the lines charge below so
-  // an unsupported build is never billed (SYN-366).
+  // an unsupported build is never billed (SYN-366). Runs on reuse too.
   if (mode === "custom") {
     ctx.report.candidateCount = manifest.functions.length;
     try {
@@ -431,6 +521,10 @@ async function buildV2(opts: BuildV2Options, ctx: BuildContext): Promise<void> {
   // code generation, so a 429 stops the build. Other failures (401, 5xx,
   // timeout) fail open: the build continues and the same lines are resent
   // next time because the baseline only moves on success (SYN-315).
+  // A reused discovery cache carries the lines_scanned of the scan that made
+  // it, so a reuse normally sends nothing (delta 0). It only sends when that
+  // scan's lines were never accepted (failed send or quota block), so a
+  // rebuild can't skip the quota by reusing the cache.
   // ---------------------------------------------------------------------------
   if (effectiveMode === "hosted") {
     let report: LinesReport | undefined;

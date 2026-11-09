@@ -23,11 +23,41 @@ describe("lines_scanned", () => {
     fs.writeFileSync(path.join(dir, "b.ts"), route + "// pad"); // 4 lines, no trailing newline
     fs.writeFileSync(path.join(dir, "util.ts"), "export const x = 1;\n"); // no route needle: not parsed
 
-    const session = { signal: new AbortController().signal } as unknown as SessionManager;
+    const session = {
+      signal: new AbortController().signal,
+      resume: { scanned: new Map() },
+      append: () => {},
+    } as unknown as SessionManager;
     const manifest = await extractTypescriptSurfaceStreamed({ workingDir: dir, session });
 
     expect(manifest.endpoints.length).toBeGreaterThan(0);
     expect(manifest.lines_scanned).toBe(14);
+  });
+
+  it("counts unchanged TypeScript files replayed from the discovery cache (SYN-8)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "synapse-lines-ts-cache-"));
+    dirs.push(dir);
+    const route = 'import express from "express";\nconst app = express();\napp.get("/a", (req, res) => res.send("ok"));\n';
+    fs.writeFileSync(path.join(dir, "a.ts"), route); // 3 lines, parsed
+    fs.writeFileSync(path.join(dir, "cached.ts"), route + "// pad\n".repeat(5)); // 8 lines, replayed
+
+    const cachedSha = createHash("sha256")
+      .update(fs.readFileSync(path.join(dir, "cached.ts")))
+      .digest("hex");
+    const appended: unknown[] = [];
+    const session = {
+      signal: new AbortController().signal,
+      resume: {
+        scanned: new Map([["cached.ts", { sha: cachedSha, endpoints: [], functions: [] }]]),
+      },
+      append: (r: unknown) => appended.push(r),
+    } as unknown as SessionManager;
+
+    const manifest = await extractTypescriptSurfaceStreamed({ workingDir: dir, session });
+
+    expect(manifest.lines_scanned).toBe(11);
+    // Only the changed file is parsed (and checkpointed).
+    expect(appended).toHaveLength(1);
   });
 
   it("counts unchanged files replayed from the ledger, so a resume reports the same total", async () => {

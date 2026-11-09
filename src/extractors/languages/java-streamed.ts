@@ -16,10 +16,12 @@ export async function extractJavaSurfaceStreamed(opts: {
 }): Promise<SurfaceManifest> {
   const { workingDir } = opts;
   const needles = [...NEEDLE_TABLE["java"].route];
+  const captureFns = opts.captureFunctions !== false;
   const endpoints: any[] = [];
   const functions: any[] = [];
   const frameworkCounts = new Map<string, number>();
   let linesScanned = 0;
+  const scannedCache = opts.session.resume.scanned;
 
   for await (const match of sniffCandidateFiles({
     workingDir,
@@ -27,15 +29,40 @@ export async function extractJavaSurfaceStreamed(opts: {
     fileExtensions: [".java"],
     signal: opts.session.signal,
   })) {
+    const cached = scannedCache.get(match.relPath);
+    if (cached && cached.sha === match.sha) {
+      endpoints.push(...cached.endpoints);
+      if (captureFns) functions.push(...cached.functions);
+      // Unchanged files still count toward the repo total (SYN-315), the same
+      // way python-streamed does, so a rescan that reuses them reports the
+      // same lines_scanned as a fresh scan.
+      try {
+        linesScanned += countLines(
+          match.fullHashed ? match.head.toString("utf-8") : await fs.readFile(match.path, "utf-8"),
+        );
+      } catch {
+        /* unreadable now: leave it out of the count */
+      }
+      continue;
+    }
     try {
       const source = await fs.readFile(match.path, "utf-8");
       const result = parseJavaFile({ source, relPath: match.relPath, module: pathJavaToModule(match.relPath) });
       linesScanned += countLines(source);
       endpoints.push(...result.endpoints);
-      if (opts.captureFunctions !== false) functions.push(...result.functions);
+      if (captureFns) functions.push(...result.functions);
       for (const f of result.frameworkHits) {
         frameworkCounts.set(f, (frameworkCounts.get(f) ?? 0) + 1);
       }
+      opts.session.append({
+        type: "file_scanned",
+        path: match.relPath,
+        sha: match.sha,
+        endpoints: result.endpoints,
+        functions: captureFns ? result.functions : [],
+        scanned_at: Date.now(),
+        elapsed_ms: 0,
+      });
     } catch {
       // skip unparseable files
     }
