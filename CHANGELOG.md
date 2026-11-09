@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.1.9](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/compare/v0.1.8...v0.1.9) (2026-11-09)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** remove the legacy v1 engine and orphaned src/builder code (SYN-257) ([#43](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/issues/43))
+* require node 20+ and harden the repo for open source (SYN-302) ([#42](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/issues/42))
+
+### Features
+
+* **build:** reuse discovered endpoints unless --discover is passed (SYN-8) ([#44](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/issues/44)) ([dbedc54](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/commit/dbedc5454ccbaf9be86a69c3c4cbc5417ad48226))
+* **cli:** remove the legacy v1 engine and orphaned src/builder code (SYN-257) ([#43](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/issues/43)) ([338354d](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/commit/338354da3739430ec7b623e6e65b0b4527b3189f))
+* require node 20+ and harden the repo for open source (SYN-302) ([#42](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/issues/42)) ([9a3f306](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/commit/9a3f306ea2231f52e48301f7d781786a0b47799c))
+
+
+### Documentation
+
+* add agent setup for contributors (SYN-293) ([#54](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/issues/54)) ([f66d961](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/commit/f66d96117db3017ef3cf6e39636d51325dc3c199))
+
 ## [0.1.8](https://github.com/2ndbrainlabs-ai/synapse-cli-ts/compare/v0.1.7...v0.1.8) (2026-11-02)
 
 
