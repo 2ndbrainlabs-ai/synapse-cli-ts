@@ -37,13 +37,21 @@ Relevant files:
 
 ### Version bumps
 
-While the package is `0.x`:
+Releases stay on `0.1.x` until the owner decides to move to `0.2.0`.
+`release-please-config.json` sets `"versioning": "always-bump-patch"`, so every
+release bumps only the patch, whatever the commit types:
 
 | Commit type | Bump |
 | --- | --- |
-| `fix:`, `perf:`, etc. | patch (`0.1.5` -> `0.1.6`) |
-| `feat:` | patch (`bump-patch-for-minor-pre-major`) |
-| `feat!:` / `BREAKING CHANGE:` footer | minor (`bump-minor-pre-major`) |
+| `fix:`, `perf:`, etc. | patch (`0.1.8` -> `0.1.9`) |
+| `feat:` | patch |
+| `feat!:` / `BREAKING CHANGE:` footer | patch (still listed under "BREAKING CHANGES" in the changelog) |
+
+The `bump-minor-pre-major` / `bump-patch-for-minor-pre-major` keys stay in the
+config but are not consulted while `always-bump-patch` is set. A `Release-As`
+footer or a `release-as` config value still overrides the strategy (see below),
+so moving to `0.2.0` is a deliberate one-off: either remove the `versioning`
+line, or force the version with `Release-As: 0.2.0`.
 
 `docs`, `refactor`, `perf`, `revert` and `deps` appear in the changelog;
 `build`, `ci`, `chore` and `test` are hidden from it.

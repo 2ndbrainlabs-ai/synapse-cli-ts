@@ -4,6 +4,7 @@
   "bootstrap-sha": "5e9566c9741f82b09b446322794977fb3272c248",
   "include-v-in-tag": true,
   "include-component-in-tag": false,
+  "versioning": "always-bump-patch",
   "bump-minor-pre-major": true,
   "bump-patch-for-minor-pre-major": true,
   "changelog-sections": [
