@@ -14,8 +14,12 @@ Turn any codebase into a production-ready [Model Context Protocol](https://model
 [![node](https://img.shields.io/node/v/@2ndbrainlabs-ai/synapse-cli.svg?logo=node.js)](https://nodejs.org)
 [![license](https://img.shields.io/badge/License-Apache_2.0-green.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 [![downloads](https://img.shields.io/npm/dm/@2ndbrainlabs-ai/synapse-cli.svg?color=blue)](https://www.npmjs.com/package/@2ndbrainlabs-ai/synapse-cli)
+[![hackathon](https://img.shields.io/badge/Hackathon-Vibe--a--thon-D97757.svg)](https://luma.com/k1fova8c)
 
 </div>
+
+> [!NOTE]
+> **We're running a hackathon!** Join the **Vibe-a-thon with 2nd Brain Labs**, a 7-day online hackathon (with Geek Room) for working professionals and interns to build practical AI-powered apps. $1,000 prize pool; final judging on November 30, 2026. [Details and registration →](https://luma.com/k1fova8c)
 
 ---
 
