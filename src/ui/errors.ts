@@ -10,6 +10,7 @@ import path from "node:path";
 import { getProjectSynapseDir } from "../config/paths.js";
 import { roundedBox } from "./box.js";
 import { t } from "./theme.js";
+import { networkHint } from "../utils/network.js";
 
 // -----------------------------------------------------------------------------
 // Wire schema — mirrors backend synapse_backend/services/_errors.py
@@ -152,12 +153,16 @@ export function authInvalidError(technical = "", keySource?: ClassifyOpts["keySo
   );
 }
 
-export function backendUnavailableError(technical = ""): WireError {
+/** `technical` should carry the fetch cause (see describeFetchError); `url`
+ *  is the address that was tried, shown so a bad SYNAPSE_API_URL is visible. */
+export function backendUnavailableError(technical = "", url?: string): WireError {
+  const details = url ? `${technical}${technical ? "\n" : ""}URL: ${url}` : technical;
   return legacyError(
     ERROR_CODES.BACKEND_UNAVAILABLE,
     "Couldn't reach the Synapse backend.",
-    "Check your network connection and try again in a minute.",
-    technical,
+    networkHint(technical) ??
+      "Check your network connection and try again in a minute. Run `synapse doctor` for details.",
+    details,
   );
 }
 

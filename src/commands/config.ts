@@ -208,7 +208,7 @@ function requireKey(): { key: string; source: Parameters<typeof apiKeySourceLabe
 
 function reportApiError(e: unknown, action: string): void {
   const message = e instanceof ApiKeysError || e instanceof Error ? e.message : String(e);
-  fail(`Couldn't ${action}`, [message]);
+  fail(`Couldn't ${action}`, message.split("\n"));
 }
 
 function day(iso: string | null): string {

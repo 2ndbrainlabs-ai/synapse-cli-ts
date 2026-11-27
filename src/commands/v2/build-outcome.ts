@@ -8,6 +8,8 @@
 // path can print an error and still exit 0.
 
 import { UiBackendError } from "../../backend/ui-client.js";
+import { getApiUrl } from "../../config/manager.js";
+import { describeFetchError } from "../../utils/network.js";
 import {
   ERROR_CODES,
   authInvalidError,
@@ -81,6 +83,7 @@ export function uiBackendFailure(
     if (err.status >= 500) return serverError(`HTTP ${err.status}: ${err.detail}`);
     return legacyError(ERROR_CODES.REQUEST_INVALID, err.detail || `HTTP ${err.status}`);
   }
-  // fetch() rejects with a TypeError when the host can't be reached.
-  return backendUnavailableError(err instanceof Error ? err.message : String(err));
+  // fetch() rejects with a TypeError when the host can't be reached; the
+  // reason (TLS, proxy, DNS) is in err.cause.
+  return backendUnavailableError(describeFetchError(err), getApiUrl());
 }
