@@ -6,6 +6,7 @@
 // the gRPC backend picks that up within ~30 s for signed keys (SYN-182).
 
 import { getApiUrl } from "./manager.js";
+import { describeFetchError, networkHint } from "../utils/network.js";
 
 export interface ApiKeyInfo {
   id: string;
@@ -41,8 +42,10 @@ async function request(apiKey: string, method: string, path: string): Promise<un
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: controller.signal,
     });
-  } catch {
-    throw new ApiKeysError("Couldn't reach Synapse. Check your connection and try again.", 0);
+  } catch (err) {
+    const why = describeFetchError(err);
+    const hint = networkHint(why) ?? "Check your connection and try again, or run `synapse doctor`.";
+    throw new ApiKeysError(`Couldn't reach Synapse at ${url}: ${why}\n${hint}`, 0);
   } finally {
     clearTimeout(timer);
   }

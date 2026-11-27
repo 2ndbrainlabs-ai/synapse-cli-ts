@@ -3,6 +3,11 @@ loadDotenv();
 
 import { createRequire } from "node:module";
 import { Command, Option } from "commander";
+import { setupNetwork } from "./utils/network.js";
+
+// IPv4-first DNS, and HTTPS_PROXY/HTTP_PROXY support for fetch (Node's
+// built-in fetch ignores proxy env vars).
+await setupNetwork();
 
 // Suppress gRPC logging before any grpc imports
 process.env.GRPC_VERBOSITY = "ERROR";
@@ -331,6 +336,14 @@ program
   .action(async () => {
     const { runInfo } = await import("./commands/info.js");
     await runInfo();
+  });
+
+program
+  .command("doctor")
+  .description("Check connectivity to the Synapse API and show network settings")
+  .action(async () => {
+    const { runDoctor } = await import("./commands/doctor.js");
+    await runDoctor();
   });
 
 program

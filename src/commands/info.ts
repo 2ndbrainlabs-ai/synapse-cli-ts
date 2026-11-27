@@ -19,6 +19,7 @@ import {
 import { t, sectionHeader, stepWarn } from "../ui/theme.js";
 import { kvGrid, type KvRow } from "../ui/kv-grid.js";
 import { EMOJI } from "../ui/icons.js";
+import { networkHint } from "../utils/network.js";
 
 export async function runInfo(): Promise<void> {
   const workingDir = process.cwd();
@@ -123,11 +124,18 @@ async function printQuota(workingDir: string): Promise<void> {
     return;
   }
 
-  const { getQuotaInfo } = await import("../grpc/telemetry.js");
+  const { getQuotaInfo, getLastQuotaError } = await import("../grpc/telemetry.js");
   const info = await getQuotaInfo(apiKey);
 
   if (!info) {
+    const why = getLastQuotaError();
     console.log(`  ${t.subtle("Could not reach backend — check your connection.")}`);
+    if (why) {
+      console.log(`  ${t.subtle(why)}`);
+      const hint = networkHint(why);
+      if (hint) console.log(`  ${t.warm(hint)}`);
+    }
+    console.log(`  ${t.dim("Run")} ${t.cmd("synapse doctor")} ${t.dim("for network details.")}`);
     return;
   }
 

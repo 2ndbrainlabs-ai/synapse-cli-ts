@@ -2,6 +2,7 @@ import { telemetryHash } from "../utils/telemetry-hash.js";
 import { getApiUrl } from "../config/manager.js";
 import { installationId } from "../backend/trace-forwarder.js";
 import { readCliVersion, UNKNOWN_CLI_VERSION } from "../utils/version.js";
+import { describeFetchError } from "../utils/network.js";
 
 // SYNAPSE_TELEMETRY=0 opts out of ANALYTICS events only (init, build, ...).
 // It does not turn off quota enforcement (SYN-315): checkQuota/getQuotaInfo
@@ -247,9 +248,17 @@ export async function checkQuota(
   }
 }
 
+let lastQuotaError: string | null = null;
+
+/** Why the last getQuotaInfo() returned null (cause + URL), for `synapse info`. */
+export function getLastQuotaError(): string | null {
+  return lastQuotaError;
+}
+
 export async function getQuotaInfo(
   apiKey: string,
 ): Promise<QuotaInfo | null> {
+  lastQuotaError = null;
   try {
     // Runs even with SYNAPSE_TELEMETRY=0, like checkQuota.
     if (!apiKey) return null;
@@ -261,9 +270,17 @@ export async function getQuotaInfo(
     const resp = await fetch(`${apiUrl}/quota`, {
       headers: { Authorization: `Bearer ${apiKey}` },
       signal: controller.signal,
-    }).finally(() => clearTimeout(timeout));
+    })
+      .catch((err: unknown) => {
+        lastQuotaError = `${describeFetchError(err)} — ${apiUrl}/quota`;
+        throw err;
+      })
+      .finally(() => clearTimeout(timeout));
 
-    if (!resp.ok) return null;
+    if (!resp.ok) {
+      lastQuotaError = `HTTP ${resp.status} — ${apiUrl}/quota`;
+      return null;
+    }
 
     const data = await resp.json();
     return {
